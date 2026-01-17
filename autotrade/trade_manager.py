@@ -63,6 +63,13 @@ class TradeManager:
             "message": "",
         }
 
+        # 数据同步状态
+        self.data_sync_status = {
+            "in_progress": False,
+            "progress": 0,
+            "message": "",
+        }
+
         self._initialized = True
 
     def set_strategy(self, strategy_instance):
@@ -545,6 +552,22 @@ class TradeManager:
             self.log(f"模型选择: {model_name}")
             return {"status": "success", "model_name": model_name}
         return {"status": "error", "message": f"模型不存在: {model_name}"}
+
+    def delete_model(self, model_name: str) -> dict:
+        """
+        删除模型
+
+        Args:
+            model_name: 模型名称
+
+        Returns:
+            操作结果
+        """
+        success = self.model_manager.delete_model(model_name)
+        if success:
+            self.log(f"删除模型: {model_name}")
+            return {"status": "success", "model_name": model_name}
+        return {"status": "error", "message": f"删除模型失败: {model_name}"}
 
     def start_rolling_update(self, config: dict = None) -> dict:
         """
