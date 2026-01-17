@@ -1,0 +1,493 @@
+{% extends "layout.html" %} {% block content %}
+<div id="models-root"></div>
+{% endblock %} {% block scripts %}
+<script type="text/babel">
+  {% raw %}
+  const ModelsPage = () => {
+    const [models, setModels] = React.useState([]);
+    const [currentModel, setCurrentModel] = React.useState(null);
+    const [strategyConfig, setStrategyConfig] = React.useState(null);
+    const [rollingStatus, setRollingStatus] = React.useState(null);
+    const [loading, setLoading] = React.useState(true);
+    const [selectedModel, setSelectedModel] = React.useState(null);
+
+    // 加载数据
+    const loadData = async () => {
+      try {
+        const [modelsRes, currentRes, configRes, statusRes] = await Promise.all(
+          [
+            fetch("/api/models").then((r) => r.json()),
+            fetch("/api/models/current").then((r) => r.json()),
+            fetch("/api/strategy/config").then((r) => r.json()),
+            fetch("/api/models/rolling_update/status").then((r) => r.json()),
+          ],
+        );
+
+        setModels(modelsRes.models || []);
+        setCurrentModel(currentRes.model);
+        setStrategyConfig(configRes);
+        setRollingStatus(statusRes);
+        setLoading(false);
+      } catch (e) {
+        console.error("加载数据失败:", e);
+        setLoading(false);
+      }
+    };
+
+    React.useEffect(() => {
+      loadData();
+      const interval = setInterval(loadData, 3000);
+      return () => clearInterval(interval);
+    }, []);
+
+    // 选择模型
+    const handleSelectModel = async (modelName) => {
+      try {
+        await fetch("/api/models/select", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model_name: modelName }),
+        });
+        loadData();
+      } catch (e) {
+        console.error("选择模型失败:", e);
+      }
+    };
+
+    // 切换策略类型
+    const handleStrategyTypeChange = async (type) => {
+      try {
+        const res = await fetch("/api/strategy/type", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ strategy_type: type }),
+        });
+        const result = await res.json();
+        if (result.status === "error") {
+          alert(result.message);
+        }
+        loadData();
+      } catch (e) {
+        console.error("切换策略失败:", e);
+      }
+    };
+
+    // 启动策略
+    const handleStartStrategy = async () => {
+      try {
+        await fetch("/api/strategy/start", { method: "POST" });
+        loadData();
+      } catch (e) {
+        console.error("启动策略失败:", e);
+      }
+    };
+
+    // 停止策略
+    const handleStopStrategy = async () => {
+      try {
+        await fetch("/api/strategy/stop", { method: "POST" });
+        loadData();
+      } catch (e) {
+        console.error("停止策略失败:", e);
+      }
+    };
+
+    // 更新 ML 配置
+    const handleMLConfigChange = async (config) => {
+      try {
+        await fetch("/api/strategy/ml_config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(config),
+        });
+        loadData();
+      } catch (e) {
+        console.error("更新配置失败:", e);
+      }
+    };
+
+    // 启动 Rolling 更新
+    const handleRollingUpdate = async () => {
+      try {
+        await fetch("/api/models/rolling_update", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        loadData();
+      } catch (e) {
+        console.error("启动 Rolling 更新失败:", e);
+      }
+    };
+
+    if (loading) {
+      return (
+        <div className="flex items-center justify-center h-64">
+          <div className="flex flex-col items-center gap-4">
+            <div className="w-8 h-8 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin"></div>
+            <div className="text-slate-400 text-sm font-medium">加载中...</div>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {/* 策略配置 */}
+        <Card title="策略配置" className="col-span-1">
+          <div className="space-y-6">
+            {/* 运行控制 */}
+            <div>
+              <label className="block text-sm text-slate-400 mb-2">
+                策略运行控制
+              </label>
+              <div className="flex items-center justify-between p-3 bg-slate-800/30 rounded-xl border border-slate-700/30 mb-3">
+                <StatusBadge status={strategyConfig?.status} />
+                {strategyConfig?.is_running ? (
+                  <button
+                    onClick={handleStopStrategy}
+                    className="px-3 py-1.5 bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 rounded-lg text-xs font-bold transition-colors"
+                  >
+                    停止策略
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleStartStrategy}
+                    className="px-3 py-1.5 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 rounded-lg text-xs font-bold transition-colors"
+                  >
+                    启动策略
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* 策略类型选择 */}
+            <div className={strategyConfig?.is_running ? "opacity-50 pointer-events-none" : ""}>
+              <label className="block text-sm text-slate-400 mb-2">
+                策略类型 {strategyConfig?.is_running && <span className="text-[10px] text-amber-500 ml-1">(请先停止以修改)</span>}
+              </label>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => handleStrategyTypeChange("momentum")}
+                  className={`flex-1 py-3 px-4 rounded-xl text-sm font-medium transition-all ${
+                    strategyConfig?.strategy_type === "momentum"
+                      ? "bg-cyan-500 text-slate-900 shadow-lg shadow-cyan-500/20"
+                      : "bg-slate-800/50 text-slate-400 hover:bg-slate-700"
+                  }`}
+                >
+                  📈 动量策略
+                </button>
+                <button
+                  onClick={() => handleStrategyTypeChange("qlib_ml")}
+                  className={`flex-1 py-3 px-4 rounded-xl text-sm font-medium transition-all ${
+                    strategyConfig?.strategy_type === "qlib_ml"
+                      ? "bg-purple-500 text-white shadow-lg shadow-purple-500/20"
+                      : "bg-slate-800/50 text-slate-400 hover:bg-slate-700"
+                  }`}
+                >
+                  🤖 ML 策略
+                </button>
+              </div>
+            </div>
+
+            {/* ML 策略参数 */}
+            {strategyConfig?.strategy_type === "qlib_ml" && (
+              <div className="space-y-4 p-4 bg-purple-500/5 rounded-xl border border-purple-500/20">
+                <div className="text-sm font-medium text-purple-300 mb-3">
+                  ML 策略参数
+                </div>
+
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">
+                    Top-K (持仓数量)
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="20"
+                    value={strategyConfig?.ml_config?.top_k || 3}
+                    onChange={(e) =>
+                      handleMLConfigChange({ top_k: parseInt(e.target.value) })
+                    }
+                    className="w-full px-3 py-2 rounded-lg text-sm"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">
+                    再平衡周期 (天)
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="30"
+                    value={strategyConfig?.ml_config?.rebalance_period || 1}
+                    onChange={(e) =>
+                      handleMLConfigChange({
+                        rebalance_period: parseInt(e.target.value),
+                      })
+                    }
+                    className="w-full px-3 py-2 rounded-lg text-sm"
+                  />
+                </div>
+
+                <div className="pt-2">
+                  <label className="block text-xs text-slate-400 mb-1">
+                    当前模型
+                  </label>
+                  <div className="text-sm font-mono text-purple-300">
+                    {currentModel?.name || "未选择"}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </Card>
+
+        {/* Rolling 更新 */}
+        <Card title="模型更新" className="col-span-1 md:col-span-2">
+          <div className="flex items-start gap-6">
+            <div className="flex-1">
+              <div className="text-sm text-slate-400 mb-4">
+                Rolling 更新将使用最新数据重新训练模型，并保存为新版本。
+              </div>
+
+              {rollingStatus?.in_progress ? (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-slate-400">进度</span>
+                    <span className="text-cyan-400 font-medium">
+                      {rollingStatus.progress}%
+                    </span>
+                  </div>
+                  <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-cyan-500 to-purple-500 transition-all duration-500"
+                      style={{ width: `${rollingStatus.progress}%` }}
+                    ></div>
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    {rollingStatus.message}
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {rollingStatus?.message && (
+                    <div
+                      className={`text-sm ${rollingStatus.message.includes("错误") ? "text-rose-400" : "text-emerald-400"}`}
+                    >
+                      {rollingStatus.message}
+                    </div>
+                  )}
+                  <Button onClick={handleRollingUpdate} variant="primary">
+                    🔄 启动 Rolling 更新
+                  </Button>
+                </div>
+              )}
+            </div>
+          </div>
+        </Card>
+
+        {/* 模型列表 */}
+        <Card title="可用模型" className="col-span-1 md:col-span-3">
+          {models.length === 0 ? (
+            <div className="text-slate-500 text-center py-12 italic border border-dashed border-slate-700/50 rounded-xl bg-slate-800/20">
+              暂无可用模型。请先运行训练脚本或 Rolling 更新。
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {models.map((model, i) => (
+                <div
+                  key={i}
+                  onClick={() => setSelectedModel(model)}
+                  className={`p-5 rounded-xl border cursor-pointer transition-all hover:border-cyan-500/50 ${
+                    model.is_current
+                      ? "bg-cyan-500/10 border-cyan-500/30"
+                      : "bg-slate-800/30 border-slate-700/30"
+                  }`}
+                >
+                  <div className="flex items-start justify-between mb-3">
+                    <div>
+                      <div className="font-medium text-slate-100">
+                        {model.name}
+                      </div>
+                      <div className="text-xs text-slate-500 mt-0.5">
+                        {model.model_type}
+                      </div>
+                    </div>
+                    {model.is_current && (
+                      <span className="px-2 py-0.5 text-xs font-medium bg-cyan-500/20 text-cyan-300 rounded">
+                        当前
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 text-sm mb-4">
+                    <div>
+                      <div className="text-xs text-slate-500">IC</div>
+                      <div
+                        className={`font-mono font-bold ${(model.metrics?.ic || 0) > 0 ? "text-emerald-400" : "text-slate-400"}`}
+                      >
+                        {(model.metrics?.ic || 0).toFixed(4)}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500">ICIR</div>
+                      <div className="font-mono text-slate-300">
+                        {(model.metrics?.icir || 0).toFixed(2)}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500">样本数</div>
+                      <div className="text-slate-300">
+                        {model.train_samples || "-"}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500">特征数</div>
+                      <div className="text-slate-300">
+                        {model.num_features || "-"}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="text-xs text-slate-500 mb-3">
+                    {model.saved_at
+                      ? new Date(model.saved_at).toLocaleString()
+                      : "-"}
+                  </div>
+
+                  {!model.is_current && (
+                    <Button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleSelectModel(model.name);
+                      }}
+                      variant="secondary"
+                      className="w-full"
+                    >
+                      选择此模型
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+
+        {/* 模型详情弹窗 */}
+        {selectedModel && (
+          <div
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50"
+            onClick={() => setSelectedModel(null)}
+          >
+            <div
+              className="glass rounded-2xl p-8 max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between mb-6">
+                <div>
+                  <h2 className="text-xl font-bold text-slate-100">
+                    {selectedModel.name}
+                  </h2>
+                  <div className="text-sm text-slate-400 mt-1">
+                    {selectedModel.model_type}
+                  </div>
+                </div>
+                <button
+                  onClick={() => setSelectedModel(null)}
+                  className="text-slate-400 hover:text-slate-200 text-2xl"
+                >
+                  ×
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                <div className="bg-slate-800/50 rounded-xl p-4">
+                  <div className="text-xs text-slate-500 mb-1">IC</div>
+                  <div className="text-2xl font-bold text-emerald-400">
+                    {(selectedModel.metrics?.ic || 0).toFixed(4)}
+                  </div>
+                </div>
+                <div className="bg-slate-800/50 rounded-xl p-4">
+                  <div className="text-xs text-slate-500 mb-1">ICIR</div>
+                  <div className="text-2xl font-bold text-purple-400">
+                    {(selectedModel.metrics?.icir || 0).toFixed(2)}
+                  </div>
+                </div>
+                <div className="bg-slate-800/50 rounded-xl p-4">
+                  <div className="text-xs text-slate-500 mb-1">样本数</div>
+                  <div className="text-2xl font-bold text-cyan-400">
+                    {selectedModel.train_samples || "-"}
+                  </div>
+                </div>
+                <div className="bg-slate-800/50 rounded-xl p-4">
+                  <div className="text-xs text-slate-500 mb-1">特征数</div>
+                  <div className="text-2xl font-bold text-slate-300">
+                    {selectedModel.num_features || "-"}
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-3 text-sm">
+                <div className="flex justify-between py-2 border-b border-slate-700/30">
+                  <span className="text-slate-400">版本</span>
+                  <span className="text-slate-200">
+                    {selectedModel.version || "-"}
+                  </span>
+                </div>
+                <div className="flex justify-between py-2 border-b border-slate-700/30">
+                  <span className="text-slate-400">保存时间</span>
+                  <span className="text-slate-200">
+                    {selectedModel.saved_at
+                      ? new Date(selectedModel.saved_at).toLocaleString()
+                      : "-"}
+                  </span>
+                </div>
+                <div className="flex justify-between py-2 border-b border-slate-700/30">
+                  <span className="text-slate-400">文件大小</span>
+                  <span className="text-slate-200">
+                    {selectedModel.file_size_mb?.toFixed(2) || "?"} MB
+                  </span>
+                </div>
+                <div className="flex justify-between py-2">
+                  <span className="text-slate-400">路径</span>
+                  <span className="text-slate-400 font-mono text-xs">
+                    {selectedModel.path || "-"}
+                  </span>
+                </div>
+              </div>
+
+              <div className="mt-6 flex gap-3">
+                {!selectedModel.is_current && (
+                  <Button
+                    onClick={() => {
+                      handleSelectModel(selectedModel.name);
+                      setSelectedModel(null);
+                    }}
+                    variant="primary"
+                    className="flex-1"
+                  >
+                    选择此模型
+                  </Button>
+                )}
+                <Button
+                  onClick={() => setSelectedModel(null)}
+                  variant="secondary"
+                  className={selectedModel.is_current ? "flex-1" : ""}
+                >
+                  关闭
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const root = ReactDOM.createRoot(document.getElementById("models-root"));
+  root.render(<ModelsPage />);
+  {% endraw %}
+</script>
+{% endblock %}

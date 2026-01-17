@@ -2,13 +2,15 @@ import os
 import threading
 import yaml
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from lumibot.backtesting import YahooDataBacktesting
 from lumibot.brokers import Alpaca
 from lumibot.traders import Trader
 
-from autotrade.strategies.momentum_strategy import MomentumStrategy
+from autotrade.strategies import MomentumStrategy, QlibMLStrategy, get_strategy_class
+from autotrade.research.models import ModelManager
 
 
 class TradeManager:
@@ -40,6 +42,23 @@ class TradeManager:
             "market_status": "unknown",
             "last_update": None,
         }
+
+        # ML 策略配置
+        self.strategy_type = "momentum"  # 'momentum' 或 'qlib_ml'
+        self.ml_config: dict[str, Any] = {
+            "model_name": None,  # None 表示使用当前模型
+            "top_k": 3,
+            "rebalance_period": 1,
+        }
+        self.model_manager = ModelManager()
+
+        # Rolling 更新状态
+        self.rolling_update_status = {
+            "in_progress": False,
+            "progress": 0,
+            "message": "",
+        }
+
         self._initialized = True
 
     def set_strategy(self, strategy_instance):
@@ -86,23 +105,38 @@ class TradeManager:
                 self.log(f"Error reading config file: {e}. Using default symbols.")
 
             self.log(f"Starting strategy for symbols: {symbols}")
+            self.log(f"Strategy type: {self.strategy_type}")
 
-            # 4. Create Strategy
+            # 4. Create Strategy based on type
             strategy_params = {
                 "symbols": symbols,
                 "sleeptime": "10S",
                 "lookback_period": 60,
             }
-            strategy = MomentumStrategy(broker=broker, parameters=strategy_params)
+
+            if self.strategy_type == "qlib_ml":
+                # ML 策略特定参数
+                strategy_params.update({
+                    "model_name": self.ml_config.get("model_name"),
+                    "top_k": self.ml_config.get("top_k", 3),
+                    "rebalance_period": self.ml_config.get("rebalance_period", 1),
+                    "sleeptime": "1D",  # ML 策略通常是日频
+                })
+                strategy = QlibMLStrategy(broker=broker, parameters=strategy_params)
+                self.log(f"Using QlibMLStrategy with model: {self.ml_config.get('model_name', 'current')}")
+            else:
+                # 默认动量策略
+                strategy = MomentumStrategy(broker=broker, parameters=strategy_params)
+                self.log("Using MomentumStrategy")
 
             # 5. Create Trader and register
-            trader = Trader()
-            trader.add_strategy(strategy)
+            self.trader = Trader()
+            self.trader.add_strategy(strategy)
 
             self.set_strategy(strategy)
 
             # 6. Start the logic
-            started = self.start_strategy(runner=trader.run_all)
+            started = self.start_strategy(runner=self.trader.run_all)
             return {"status": "started" if started else "failed"}
 
         except Exception as e:
@@ -132,19 +166,32 @@ class TradeManager:
 
                 self.log(f"Backtesting {symbols} from {backtesting_start} to {backtesting_end}")
 
-                # 3. Execute backtest
+                # 3. Get strategy class and execute backtest
+                strategy_type = params.get("strategy_type", self.strategy_type)
+                strategy_class = get_strategy_class(strategy_type)
+
                 try:
-                    # MomentumStrategy.backtest is a blocking call
-                    MomentumStrategy.backtest(
+                    # Strategy.backtest is a blocking call
+                    backtest_params = {
+                        "symbols": symbols,
+                        "lookback_period": 60,
+                        "sleeptime": "0S"
+                    }
+
+                    # Add ML-specific params if needed
+                    if strategy_type == "qlib_ml":
+                        backtest_params.update({
+                            "model_name": params.get("model_name", self.ml_config.get("model_name")),
+                            "top_k": params.get("top_k", self.ml_config.get("top_k", 3)),
+                            "rebalance_period": params.get("rebalance_period", 1),
+                        })
+
+                    strategy_class.backtest(
                         YahooDataBacktesting,
                         backtesting_start,
                         backtesting_end,
-                        benchmark_asset=symbols[0], 
-                        parameters={
-                            "symbols": symbols,
-                            "lookback_period": 60,
-                            "sleeptime": "0S"
-                        },
+                        benchmark_asset=symbols[0],
+                        parameters=backtest_params,
                     )
                     self.log("Backtest finished successfully.")
                 except Exception as e:
@@ -261,23 +308,22 @@ class TradeManager:
 
     def stop_strategy(self):
         """Stop the running strategy."""
-        if self.active_strategy:
-            # LumiBot strategies usually have a minimal teardown or we just stop the process
-            # But here we rely on the framework or just wait if we can signal it.
-            # Assuming we can't easily 'kill' it gracefully without support from strategy logic.
-            # For now, we update status and hopefully the strategy implementation checks it,
-            # but LumiBot's `run()` is blocking loop.
-            # We might need to call `self.active_strategy.stop()` if that exists?
-            # Checking LumiBot docs mentally: Lifecycle can be tricky.
-            # Use lifecycle management if possible.
-            pass
-
-        # For this MVP, we might treat 'stop' as just marking it.
-        # But really we want to abort.
-        # We will assume the strategy checks a flag or we restart the server.
-        # Let's just update the status for now.
+        self.log("Stopping strategy...")
         self.update_status("stopping")
-        # In a real app we'd need a way to interrupt the loop.
+        
+        if hasattr(self, 'trader') and self.trader:
+            try:
+                # In newer LumiBot versions, we can stop the trader
+                # If not available, we at least mark it as not running
+                if hasattr(self.trader, 'stop_all'):
+                    self.trader.stop_all()
+            except Exception as e:
+                self.log(f"Error stopping trader: {e}")
+
+        # Force thread to end if possible and mark as stopped
+        self.is_running = False
+        self.update_status("stopped")
+        return {"status": "success", "message": "策略已停止"}
 
     def update_status(self, status: str):
         self.state["status"] = status
@@ -303,3 +349,217 @@ class TradeManager:
 
     def get_state(self):
         return self.state
+
+    # ==================== ML 策略相关 API ====================
+
+    def set_strategy_type(self, strategy_type: str) -> dict:
+        """
+        设置策略类型
+
+        Args:
+            strategy_type: 'momentum' 或 'qlib_ml'
+
+
+        Returns:
+            操作结果
+        """
+        if strategy_type not in ["momentum", "qlib_ml"]:
+            return {"status": "error", "message": f"未知策略类型: {strategy_type}"}
+
+        if self.is_running:
+            return {"status": "error", "message": "策略运行中，请先停止"}
+
+        self.strategy_type = strategy_type
+        self.log(f"策略类型设置为: {strategy_type}")
+        return {"status": "success", "strategy_type": strategy_type}
+
+    def set_ml_config(self, config: dict) -> dict:
+        """
+        设置 ML 策略配置
+
+        Args:
+            config: 包含 model_name, top_k, rebalance_period 等参数
+
+        Returns:
+            操作结果
+        """
+        if self.is_running:
+            return {"status": "error", "message": "策略运行中，请先停止"}
+
+        # 更新配置
+        if "model_name" in config:
+            self.ml_config["model_name"] = config["model_name"]
+        if "top_k" in config:
+            self.ml_config["top_k"] = int(config["top_k"])
+        if "rebalance_period" in config:
+            self.ml_config["rebalance_period"] = int(config["rebalance_period"])
+
+        self.log(f"ML 配置更新: {self.ml_config}")
+        return {"status": "success", "config": self.ml_config}
+
+    def get_strategy_config(self) -> dict:
+        """获取当前策略配置"""
+        return {
+            "strategy_type": self.strategy_type,
+            "ml_config": self.ml_config,
+            "available_strategies": ["momentum", "qlib_ml"],
+            "is_running": self.is_running,
+            "status": self.state["status"],
+        }
+
+    def list_models(self) -> list:
+        """列出所有可用的 ML 模型"""
+        return self.model_manager.list_models()
+
+    def get_current_model(self) -> dict:
+        """获取当前选择的模型信息"""
+        model_name = self.model_manager.get_current_model()
+        if model_name:
+            info = self.model_manager.get_model_info(model_name)
+            return {"status": "success", "model": info}
+        return {"status": "success", "model": None, "message": "未选择模型"}
+
+    def select_model(self, model_name: str) -> dict:
+        """
+        选择要使用的模型
+
+        Args:
+            model_name: 模型名称
+
+        Returns:
+            操作结果
+        """
+        success = self.model_manager.set_current_model(model_name)
+        if success:
+            # 同时更新 ML 配置
+            self.ml_config["model_name"] = model_name
+            self.log(f"模型选择: {model_name}")
+            return {"status": "success", "model_name": model_name}
+        return {"status": "error", "message": f"模型不存在: {model_name}"}
+
+    def start_rolling_update(self, config: dict = None) -> dict:
+        """
+        启动 Rolling 模型更新
+
+        Args:
+            config: 可选的训练配置
+
+        Returns:
+            操作结果
+        """
+        if self.rolling_update_status["in_progress"]:
+            return {"status": "error", "message": "Rolling 更新已在进行中"}
+
+        def _rolling_update_task():
+            try:
+                from autotrade.research.data import QlibDataAdapter
+                from autotrade.research.features import QlibFeatureGenerator
+                from autotrade.research.models import LightGBMTrainer
+                from datetime import timedelta
+
+                self.rolling_update_status["in_progress"] = True
+                self.rolling_update_status["progress"] = 0
+                self.rolling_update_status["message"] = "开始 Rolling 更新..."
+                self.log("开始 Rolling 更新")
+
+                # 默认配置
+                train_config = config or {}
+                symbols = train_config.get("symbols", ["SPY", "AAPL", "MSFT"])
+                train_days = train_config.get("train_days", 252)
+                target_horizon = train_config.get("target_horizon", 5)
+
+                # 1. 加载数据 (20%)
+                self.rolling_update_status["progress"] = 10
+                self.rolling_update_status["message"] = "加载数据..."
+
+                adapter = QlibDataAdapter()
+                end_date = datetime.now()
+                start_date = end_date - timedelta(days=train_days + 60)
+
+                # 尝试获取新数据
+                try:
+                    adapter.fetch_and_store(symbols, start_date, end_date, update_mode="append")
+                except Exception as e:
+                    self.log(f"获取新数据失败（将使用现有数据）: {e}")
+
+                df = adapter.load_data(symbols, start_date, end_date)
+                self.rolling_update_status["progress"] = 20
+
+                if df.empty:
+                    raise ValueError("没有可用的数据")
+
+                # 2. 生成特征 (40%)
+                self.rolling_update_status["message"] = "生成特征..."
+                feature_gen = QlibFeatureGenerator(normalize=True)
+                features = feature_gen.generate(df)
+                self.rolling_update_status["progress"] = 40
+
+                # 3. 生成目标变量
+                self.rolling_update_status["message"] = "准备训练数据..."
+                import pandas as pd
+
+                if isinstance(df.index, pd.MultiIndex):
+                    close_prices = df["close"].unstack("symbol")
+                    future_returns = close_prices.pct_change(target_horizon).shift(-target_horizon)
+                    target = future_returns.stack().reindex(features.index)
+                else:
+                    target = df["close"].pct_change(target_horizon).shift(-target_horizon)
+                    target = target.reindex(features.index)
+
+                # 移除 NaN
+                import numpy as np
+                valid_mask = ~(features.isna().any(axis=1) | target.isna())
+                features = features[valid_mask]
+                target = target[valid_mask]
+                self.rolling_update_status["progress"] = 50
+
+                # 4. 训练模型 (80%)
+                self.rolling_update_status["message"] = "训练模型..."
+
+                # 分割训练/验证集 (80/20)
+                split_idx = int(len(features) * 0.8)
+                X_train, X_valid = features.iloc[:split_idx], features.iloc[split_idx:]
+                y_train, y_valid = target.iloc[:split_idx], target.iloc[split_idx:]
+
+                trainer = LightGBMTrainer(
+                    model_name="lightgbm_rolling",
+                    num_boost_round=300,
+                )
+                trainer.train(X_train, y_train, X_valid, y_valid)
+                self.rolling_update_status["progress"] = 80
+
+                # 5. 评估并保存 (100%)
+                self.rolling_update_status["message"] = "保存模型..."
+                metrics = trainer.evaluate(X_valid, y_valid)
+                trainer.metadata.update({
+                    "symbols": symbols,
+                    "train_days": train_days,
+                    "ic": metrics["ic"],
+                    "icir": metrics["icir"],
+                    "rolling_update": True,
+                    "updated_at": datetime.now().isoformat(),
+                })
+
+                model_path = trainer.save()
+                self.rolling_update_status["progress"] = 100
+                self.rolling_update_status["message"] = f"完成！模型: {model_path.name}, IC: {metrics['ic']:.4f}"
+
+                self.log(f"Rolling 更新完成: {model_path.name}, IC={metrics['ic']:.4f}")
+
+            except Exception as e:
+                import traceback
+                self.rolling_update_status["message"] = f"错误: {e}"
+                self.log(f"Rolling 更新失败: {e}")
+                traceback.print_exc()
+            finally:
+                self.rolling_update_status["in_progress"] = False
+
+        # 启动后台任务
+        thread = threading.Thread(target=_rolling_update_task, daemon=True)
+        thread.start()
+
+        return {"status": "started", "message": "Rolling 更新已启动"}
+
+    def get_rolling_update_status(self) -> dict:
+        """获取 Rolling 更新状态"""
+        return self.rolling_update_status

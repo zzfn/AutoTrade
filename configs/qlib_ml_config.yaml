@@ -1,0 +1,100 @@
+# Qlib ML 策略配置
+
+# 数据获取配置
+data:
+  # 股票池
+  symbols:
+    - SPY
+    - AAPL
+    - MSFT
+    - GOOGL
+    - AMZN
+    - META
+    - NVDA
+    - TSLA
+    - JPM
+    - V
+
+  # 数据源优先级: alpaca > yfinance
+  data_dir: data/qlib
+
+  # 历史数据天数
+  train_days: 504 # 约 2 年
+  valid_days: 63 # 约 3 个月
+
+# 特征工程配置
+features:
+  # 滚动窗口大小
+  window_sizes:
+    - 5
+    - 10
+    - 20
+    - 30
+    - 60
+
+  # 是否包含原始 OHLCV 特征
+  include_raw: true
+
+  # 是否标准化
+  normalize: true
+
+  # 缺失值处理方法: ffill, bfill, zero, mean
+  fill_method: ffill
+
+# 模型训练配置
+model:
+  # 模型类型
+  type: lightgbm
+
+  # 模型名称前缀
+  name: lightgbm
+
+  # LightGBM 参数
+  params:
+    objective: regression
+    metric: mse
+    boosting_type: gbdt
+    num_leaves: 31
+    learning_rate: 0.05
+    feature_fraction: 0.8
+    bagging_fraction: 0.8
+    bagging_freq: 5
+    verbose: -1
+    n_jobs: -1
+    seed: 42
+
+  # 训练参数
+  num_boost_round: 500
+  early_stopping_rounds: 50
+
+  # 目标变量
+  target_horizon: 5 # 预测未来 5 天收益
+
+# 策略配置
+strategy:
+  # 策略类型: momentum, qlib_ml
+  type: qlib_ml
+
+  # ML 策略参数
+  ml:
+    # 持仓股票数量
+    top_k: 3
+
+    # 再平衡周期（天）
+    rebalance_period: 1
+
+    # 交易间隔
+    sleeptime: "1D"
+
+# Walk-Forward 验证配置
+validation:
+  enabled: false
+  train_window: 252 # 约 1 年
+  test_window: 21 # 约 1 个月
+  step_size: 21
+
+# Rolling 更新配置
+rolling_update:
+  # 默认训练配置
+  train_days: 252
+  target_horizon: 5

@@ -7,12 +7,30 @@
     const [params, setParams] = useState({
       start_date: "2025-01-01",
       end_date: "2025-12-31",
-      strategy: "MomentumStrategy",
+      strategy_type: "momentum",
       symbol: "TSLA",
+      model_name: "",
+      top_k: 3,
+      rebalance_period: 1,
     });
+    const [models, setModels] = useState([]);
     const [loading, setLoading] = useState(false);
+
     // We reuse the main WS for logs for now
     const { data } = useWebSocket(`ws://${window.location.host}/ws`);
+
+    useEffect(() => {
+      const fetchModels = async () => {
+        try {
+          const res = await fetch("/api/models");
+          const data = await res.json();
+          setModels(data.models || []);
+        } catch (e) {
+          console.error("Failed to fetch models", e);
+        }
+      };
+      fetchModels();
+    }, []);
 
     const runBacktest = async () => {
       setLoading(true);
@@ -39,14 +57,74 @@
               </label>
               <select
                 className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg p-2.5 text-slate-200 focus:border-cyan-500/50 outline-none transition-colors"
-                value={params.strategy}
-                disabled
+                value={params.strategy_type}
+                onChange={(e) =>
+                  setParams({ ...params, strategy_type: e.target.value })
+                }
               >
-                <option value="MomentumStrategy">
-                  动量突破策略 (Momentum)
-                </option>
+                <option value="momentum">动量突破策略 (Momentum)</option>
+                <option value="qlib_ml">机器学习策略 (Qlib ML)</option>
               </select>
             </div>
+
+            {params.strategy_type === "qlib_ml" && (
+              <div className="p-4 bg-purple-500/5 rounded-xl border border-purple-500/20 space-y-4">
+                <div>
+                  <label className="block text-xs font-medium text-purple-300 mb-1.5">
+                    模型选择
+                  </label>
+                  <select
+                    className="w-full bg-slate-900/50 border border-slate-700/50 rounded-lg p-2 text-slate-200 text-sm focus:border-purple-500/50 outline-none"
+                    value={params.model_name}
+                    onChange={(e) =>
+                      setParams({ ...params, model_name: e.target.value })
+                    }
+                  >
+                    <option value="">使用当前最优模型</option>
+                    {models.map((m) => (
+                      <option key={m.name} value={m.name}>
+                        {m.name} (IC: {(m.metrics?.ic || 0).toFixed(3)})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">
+                      Top-K
+                    </label>
+                    <input
+                      type="number"
+                      className="w-full bg-slate-900/50 border border-slate-700/50 rounded-lg p-2 text-slate-200"
+                      value={params.top_k}
+                      onChange={(e) =>
+                        setParams({
+                          ...params,
+                          top_k: parseInt(e.target.value),
+                        })
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">
+                      权重周期
+                    </label>
+                    <input
+                      type="number"
+                      className="w-full bg-slate-900/50 border border-slate-700/50 rounded-lg p-2 text-slate-200"
+                      value={params.rebalance_period}
+                      onChange={(e) =>
+                        setParams({
+                          ...params,
+                          rebalance_period: parseInt(e.target.value),
+                        })
+                      }
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div>
               <label className="block text-sm font-medium text-slate-400 mb-1.5">
                 交易标的 (逗号分隔)
