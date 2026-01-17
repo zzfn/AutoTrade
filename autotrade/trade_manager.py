@@ -710,3 +710,63 @@ class TradeManager:
     def get_rolling_update_status(self) -> dict:
         """获取 Rolling 更新状态"""
         return self.rolling_update_status
+
+    def start_data_sync(self, config: dict = None) -> dict:
+        """
+        启动数据同步
+
+        Args:
+            config: 包含 symbols, days, interval, update_mode 等参数
+        """
+        if self.data_sync_status["in_progress"]:
+            return {"status": "error", "message": "数据同步已在进行中"}
+
+        def _data_sync_task():
+            try:
+                from autotrade.research.data import QlibDataAdapter
+                from datetime import timedelta
+
+                self.data_sync_status["in_progress"] = True
+                self.data_sync_status["progress"] = 0
+                self.data_sync_status["message"] = "准备同步数据..."
+                self.log("开始数据同步")
+
+                sync_config = config or {}
+                symbols = sync_config.get("symbols", ["SPY", "AAPL", "MSFT"])
+                days = sync_config.get("days", 365)
+                interval = sync_config.get("interval", "1d")
+                update_mode = sync_config.get("update_mode", "append")
+
+                adapter = QlibDataAdapter(interval=interval)
+                end_date = datetime.now()
+                start_date = end_date - timedelta(days=days)
+
+                self.data_sync_status["message"] = (
+                    f"正在从 Alpaca 获取 {len(symbols)} 只股票的数据..."
+                )
+                self.data_sync_status["progress"] = 10
+
+                adapter.fetch_and_store(
+                    symbols, start_date, end_date, update_mode=update_mode
+                )
+
+                self.data_sync_status["progress"] = 100
+                self.data_sync_status["message"] = (
+                    f"成功同步 {len(symbols)} 只股票的数据 ({interval})"
+                )
+                self.log(f"数据同步完成: {len(symbols)} symbols")
+
+            except Exception as e:
+                self.data_sync_status["message"] = f"同步失败: {e}"
+                self.log(f"数据同步失败: {e}")
+            finally:
+                self.data_sync_status["in_progress"] = False
+
+        thread = threading.Thread(target=_data_sync_task, daemon=True)
+        thread.start()
+
+        return {"status": "started", "message": "数据同步已启动"}
+
+    def get_data_sync_status(self) -> dict:
+        """获取数据同步状态"""
+        return self.data_sync_status
