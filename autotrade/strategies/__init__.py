@@ -1,3 +1,4 @@
-from .simple_strategy import SimpleStrategy
+from .momentum_strategy import MomentumStrategy
 
-__all__ = ["SimpleStrategy"]
+
+__all__ = ["MomentumStrategy"]
