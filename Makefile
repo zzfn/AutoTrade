@@ -50,9 +50,22 @@ sync:
 # 运行
 # ==================
 
-# 运行主程序
+# 运行帮助
 run:
 	uv run python main.py
+
+# 运行回测
+backtest:
+	uv run python main.py backtest
+
+# 运行模拟盘
+paper:
+	uv run python main.py paper
+
+# 运行实盘（谨慎使用！）
+live:
+	@echo "⚠️  警告：即将启动实盘交易！"
+	@read -p "确认继续？[y/N] " confirm && [ "$$confirm" = "y" ] && uv run python main.py live || echo "已取消"
 
 # ==================
 # 代码质量
