@@ -40,3 +40,24 @@ dmypy.json
 # OS
 .DS_Store
 Thumbs.db
+
+# AI Agent 工具目录的临时文件
+.agent/*/temp/
+.agent/*/cache/
+.agent/*/logs/
+.agent/*/.tmp*
+.agent/*/*.log
+
+# Claude Code 临时数据
+.claude/*/temp/
+.claude/*/cache/
+.claude/*/logs/
+.claude/*/.tmp*
+.claude/*/*.log
+
+# OpenCode 工具临时数据
+.opencode/*/temp/
+.opencode/*/cache/
+.opencode/*/logs/
+.opencode/*/.tmp*
+.opencode/*/*.log
