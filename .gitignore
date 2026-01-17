@@ -61,3 +61,35 @@ Thumbs.db
 .opencode/*/logs/
 .opencode/*/.tmp*
 .opencode/*/*.log
+
+# AutoTrade 项目特定忽略
+
+# 运行时输出 (outputs/)
+outputs/logs/*.log
+outputs/models/*.pkl
+outputs/models/*.bin
+outputs/models/*.onnx
+outputs/models/*.pt
+outputs/models/*.pth
+outputs/models/checkpoints/*
+outputs/backtests/*
+# 保留所有子目录中的 .gitkeep
+!outputs/**/.gitkeep
+
+# 数据目录 (data/)
+data/*
+!data/.gitkeep
+# 保留子目录结构
+!data/raw/
+!data/processed/
+!data/cache/
+# 忽略子目录内容
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+data/cache/*
+!data/cache/.gitkeep
+
+# Notebooks
+.ipynb_checkpoints
