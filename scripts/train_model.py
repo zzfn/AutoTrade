@@ -100,6 +100,15 @@ def parse_args():
         help="配置文件路径 (YAML)",
     )
 
+    # 频率
+    parser.add_argument(
+        "--interval",
+        type=str,
+        default="1d",
+        choices=["1d", "1h"],
+        help="数据频率 (1d 或 1h)",
+    )
+
     # 其他
     parser.add_argument(
         "--data-dir",
@@ -134,6 +143,7 @@ def prepare_data(
     train_days: int,
     valid_days: int,
     target_horizon: int,
+    interval: str = "1d",
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
     """
     准备训练和验证数据
@@ -141,10 +151,10 @@ def prepare_data(
     Returns:
         X_train, X_valid, y_train, y_valid
     """
-    logger.info("准备数据...")
+    logger.info(f"准备数据 (interval={interval})...")
 
     # 加载数据
-    adapter = QlibDataAdapter(data_dir=data_dir)
+    adapter = QlibDataAdapter(data_dir=data_dir, interval=interval)
 
     # 检查是否有数据
     available_symbols = adapter.get_available_symbols()
@@ -237,6 +247,7 @@ def main():
     logger.info(f"预测 horizon: {args.target_horizon}")
     logger.info(f"模型名称: {args.model_name}")
     logger.info(f"Walk-Forward 验证: {args.walk_forward}")
+    logger.info(f"数据频率: {args.interval}")
     logger.info("=" * 60)
 
     try:
@@ -247,6 +258,7 @@ def main():
             train_days=args.train_days,
             valid_days=args.valid_days,
             target_horizon=args.target_horizon,
+            interval=args.interval,
         )
 
         if args.walk_forward:

@@ -97,6 +97,13 @@ class QlibMLStrategy(Strategy):
         self.lookback_period = self.parameters.get("lookback_period", 60)
         self.sleeptime = self.parameters.get("sleeptime", "1D")
         self.models_dir = self.parameters.get("models_dir", "models")
+        
+        # 数据频率参数: 'day' 或 'hour'
+        self.interval = self.parameters.get("interval", "day")
+        if self.interval == "1h":
+            self.interval = "hour"
+        elif self.interval == "1d":
+            self.interval = "day"
 
         # 确保 top_k 不超过股票数量
         self.top_k = min(self.top_k, len(self.symbols))
@@ -117,8 +124,16 @@ class QlibMLStrategy(Strategy):
             # 加载模型
             self.trainer = LightGBMTrainer(model_dir=self.models_dir)
             self.trainer.load(model_path)
+            
+            # 如果模型元数据中有 interval，且策略未显式指定，则尝试同步
+            if hasattr(self.trainer, 'metadata') and 'interval' in self.trainer.metadata:
+                model_interval = self.trainer.metadata['interval']
+                if model_interval == "1h":
+                    self.interval = "hour"
+                elif model_interval == "1d":
+                    self.interval = "day"
 
-            self.log_message(f"已加载模型: {model_path.name}")
+            self.log_message(f"已加载模型: {model_path.name} (Interval: {self.interval})")
 
         except Exception as e:
             self.log_message(f"加载模型失败: {e}")
@@ -135,11 +150,11 @@ class QlibMLStrategy(Strategy):
         4. 调整持仓
         """
         try:
-            current_date = self.get_datetime().date()
+            current_time = self.get_datetime()
 
             # 检查是否需要再平衡
-            if self._should_rebalance(current_date):
-                self.log_message(f"开始再平衡 ({current_date})")
+            if self._should_rebalance(current_time):
+                self.log_message(f"开始再平衡 ({current_time})")
 
                 # 获取预测
                 predictions = self._get_predictions()
@@ -156,7 +171,7 @@ class QlibMLStrategy(Strategy):
                 self._rebalance_portfolio(top_symbols)
 
                 # 更新状态
-                self.last_rebalance_date = current_date
+                self.last_rebalance_date = current_time
                 self.current_predictions = predictions
 
         except Exception as e:
@@ -165,13 +180,19 @@ class QlibMLStrategy(Strategy):
             self.log_message(f"交易迭代错误: {e}")
             traceback.print_exc()
 
-    def _should_rebalance(self, current_date) -> bool:
+    def _should_rebalance(self, current_time) -> bool:
         """检查是否应该再平衡"""
         if self.last_rebalance_date is None:
             return True
 
-        days_since_last = (current_date - self.last_rebalance_date).days
-        return days_since_last >= self.rebalance_period
+        if self.interval == "hour":
+            # 如果是小时频率，按小时计算差值
+            hours_since_last = (current_time - self.last_rebalance_date).total_seconds() / 3600
+            return hours_since_last >= self.rebalance_period
+        else:
+            # 默认按天计算
+            days_since_last = (current_time.date() - self.last_rebalance_date.date()).days
+            return days_since_last >= self.rebalance_period
 
     def _get_predictions(self) -> dict:
         """
@@ -186,7 +207,7 @@ class QlibMLStrategy(Strategy):
             try:
                 # 获取历史数据
                 history = self.get_historical_prices(
-                    symbol, self.lookback_period, "day"
+                    symbol, self.lookback_period, self.interval
                 )
 
                 if history is None or history.df.empty:

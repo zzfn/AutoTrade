@@ -11,7 +11,7 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from autotrade.strategies.momentum_strategy import MomentumStrategy
+from autotrade.execution.strategies.momentum_strategy import MomentumStrategy
 from autotrade.trade_manager import TradeManager
 
 
@@ -43,9 +43,9 @@ async def lifespan(app: FastAPI):
         logging.info(f"策略启动结果: {result}")
     except Exception as e:
         logging.error(f"策略启动失败: {e}")
-    
+
     yield  # 这里是应用运行期间
-    
+
     # 应用关闭时的清理逻辑
     logging.info("正在执行策略生命周期关闭清理...")
     tm.stop_strategy()
@@ -64,6 +64,11 @@ STATIC_DIR = os.path.join(UI_DIR, "static")
 
 # Mounts
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.mount(
+    "/reports",
+    StaticFiles(directory=os.path.join(os.path.dirname(BASE_DIR), "logs")),
+    name="reports",
+)
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
 # Manager

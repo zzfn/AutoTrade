@@ -59,6 +59,13 @@ def parse_args():
         default="replace",
         help="更新模式: replace=替换, append=追加 (默认: replace)",
     )
+    parser.add_argument(
+        "--interval",
+        type=str,
+        choices=["1d", "1h"],
+        default="1d",
+        help="数据频率: 1d 或 1h (默认: 1d)",
+    )
     return parser.parse_args()
 
 
@@ -85,10 +92,11 @@ def main():
     logger.info(f"日期范围: {start_date.date()} - {end_date.date()}")
     logger.info(f"数据目录: {args.data_dir}")
     logger.info(f"更新模式: {args.update_mode}")
+    logger.info(f"数据频率: {args.interval}")
     logger.info("=" * 50)
 
     # 创建适配器并获取数据
-    adapter = QlibDataAdapter(data_dir=args.data_dir)
+    adapter = QlibDataAdapter(data_dir=args.data_dir, interval=args.interval)
 
     try:
         result = adapter.fetch_and_store(

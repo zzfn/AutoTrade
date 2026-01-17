@@ -9,7 +9,11 @@ from lumibot.backtesting import YahooDataBacktesting
 from lumibot.brokers import Alpaca
 from lumibot.traders import Trader
 
-from autotrade.strategies import MomentumStrategy, QlibMLStrategy, get_strategy_class
+from autotrade.execution.strategies import (
+    MomentumStrategy,
+    QlibMLStrategy,
+    get_strategy_class,
+)
 from autotrade.research.models import ModelManager
 
 
@@ -76,7 +80,9 @@ class TradeManager:
         paper_trading = os.getenv("ALPACA_PAPER", "True").lower() == "true"
 
         if not api_key or not secret_key:
-            self.log("错误: 环境变量中未找到 Alpaca 凭证 (ALPACA_API_KEY, ALPACA_API_SECRET)。")
+            self.log(
+                "错误: 环境变量中未找到 Alpaca 凭证 (ALPACA_API_KEY, ALPACA_API_SECRET)。"
+            )
             return {"status": "error", "message": "缺少凭证"}
 
         try:
@@ -89,7 +95,7 @@ class TradeManager:
             base_dir = os.path.dirname(os.path.abspath(__file__))
             config_path = os.path.join(base_dir, "../configs/universe.yaml")
             symbols = ["SPY"]  # Default
-            
+
             try:
                 if os.path.exists(config_path):
                     with open(config_path, "r") as f:
@@ -98,9 +104,13 @@ class TradeManager:
                             symbols = config["symbols"]
                             self.log(f"Loaded symbols from config: {symbols}")
                         else:
-                            self.log("Config file found but no 'symbols' key. Using default.")
+                            self.log(
+                                "Config file found but no 'symbols' key. Using default."
+                            )
                 else:
-                    self.log(f"Config file not found at {config_path}. Using default symbols.")
+                    self.log(
+                        f"Config file not found at {config_path}. Using default symbols."
+                    )
             except Exception as e:
                 self.log(f"Error reading config file: {e}. Using default symbols.")
 
@@ -116,14 +126,18 @@ class TradeManager:
 
             if self.strategy_type == "qlib_ml":
                 # ML 策略特定参数
-                strategy_params.update({
-                    "model_name": self.ml_config.get("model_name"),
-                    "top_k": self.ml_config.get("top_k", 3),
-                    "rebalance_period": self.ml_config.get("rebalance_period", 1),
-                    "sleeptime": "1D",  # ML 策略通常是日频
-                })
+                strategy_params.update(
+                    {
+                        "model_name": self.ml_config.get("model_name"),
+                        "top_k": self.ml_config.get("top_k", 3),
+                        "rebalance_period": self.ml_config.get("rebalance_period", 1),
+                        "sleeptime": "1D",  # ML 策略通常是日频
+                    }
+                )
                 strategy = QlibMLStrategy(broker=broker, parameters=strategy_params)
-                self.log(f"Using QlibMLStrategy with model: {self.ml_config.get('model_name', 'current')}")
+                self.log(
+                    f"Using QlibMLStrategy with model: {self.ml_config.get('model_name', 'current')}"
+                )
             else:
                 # 默认动量策略
                 strategy = MomentumStrategy(broker=broker, parameters=strategy_params)
@@ -149,7 +163,7 @@ class TradeManager:
         def _backtest_task():
             try:
                 self.log("Starting backtest...")
-                
+
                 # 1. Parse dates
                 backtesting_start = datetime.strptime(
                     params.get("start_date", "2023-01-01"), "%Y-%m-%d"
@@ -157,45 +171,109 @@ class TradeManager:
                 backtesting_end = datetime.strptime(
                     params.get("end_date", "2023-01-31"), "%Y-%m-%d"
                 )
-                
-                # 2. Parse symbols
+
+                # 2. Parse symbols (clean up quotes and spaces)
                 symbol_input = params.get("symbol", "SPY")
-                symbols = [s.strip() for s in symbol_input.split(",") if s.strip()]
+                symbols = [
+                    s.strip().replace('"', "").replace("'", "")
+                    for s in symbol_input.split(",")
+                    if s.strip()
+                ]
                 if not symbols:
                     symbols = ["SPY"]
 
-                self.log(f"Backtesting {symbols} from {backtesting_start} to {backtesting_end}")
+                # 3. Parse interval
+                interval = params.get("interval", "1d")
+                if interval not in ["1d", "1h"]:
+                    interval = "1d"
 
-                # 3. Get strategy class and execute backtest
+                self.log(
+                    f"Backtesting {symbols} from {backtesting_start} to {backtesting_end} (Interval: {interval})"
+                )
+
+                # 4. Get strategy class and execute backtest
                 strategy_type = params.get("strategy_type", self.strategy_type)
                 strategy_class = get_strategy_class(strategy_type)
 
                 try:
+                    # Map interval to LumiBot frequency
+                    # LumiBot usually uses 'day', 'hour', 'minute', etc.
+                    lumibot_interval = "hour" if interval == "1h" else "day"
+
                     # Strategy.backtest is a blocking call
                     backtest_params = {
                         "symbols": symbols,
                         "lookback_period": 60,
-                        "sleeptime": "0S"
+                        "sleeptime": "0S",
+                        "timestep": "1H" if interval == "1h" else "1D",
                     }
 
                     # Add ML-specific params if needed
                     if strategy_type == "qlib_ml":
-                        backtest_params.update({
-                            "model_name": params.get("model_name", self.ml_config.get("model_name")),
-                            "top_k": params.get("top_k", self.ml_config.get("top_k", 3)),
-                            "rebalance_period": params.get("rebalance_period", 1),
-                        })
+                        backtest_params.update(
+                            {
+                                "model_name": params.get(
+                                    "model_name", self.ml_config.get("model_name")
+                                ),
+                                "top_k": params.get(
+                                    "top_k", self.ml_config.get("top_k", 3)
+                                ),
+                                "rebalance_period": params.get("rebalance_period", 1),
+                            }
+                        )
+
+                    # If multiple symbols, use SPY as benchmark for better clarity
+                    benchmark = (
+                        "SPY" if len(symbols) > 1 or symbols[0] != "SPY" else symbols[0]
+                    )
+
+                    # Start time to identify new files
+                    start_time = datetime.now()
 
                     strategy_class.backtest(
                         YahooDataBacktesting,
                         backtesting_start,
                         backtesting_end,
-                        benchmark_asset=symbols[0],
+                        benchmark_asset=benchmark,
                         parameters=backtest_params,
+                        # LumiBot uses time_unit for interval
+                        time_unit=lumibot_interval,
                     )
+
+                    # Find newly generated reports in logs/
+                    import glob
+
+                    base_dir = os.path.dirname(os.path.abspath(__file__))
+                    logs_dir = os.path.join(os.path.dirname(base_dir), "logs")
+
+                    # Look for html files generated recently
+                    html_files = glob.glob(os.path.join(logs_dir, "*.html"))
+                    new_reports = []
+                    for f in html_files:
+                        if (
+                            os.path.getmtime(f) >= start_time.timestamp() - 5
+                        ):  # 5s buffer
+                            new_reports.append(os.path.basename(f))
+
+                    tearsheet = next((f for f in new_reports if "tearsheet" in f), None)
+                    trades_report = next(
+                        (f for f in new_reports if "trades" in f), None
+                    )
+
+                    if tearsheet or trades_report:
+                        self.state["last_backtest"] = {
+                            "tearsheet": f"/reports/{tearsheet}" if tearsheet else None,
+                            "trades": f"/reports/{trades_report}"
+                            if trades_report
+                            else None,
+                            "timestamp": datetime.now().isoformat(),
+                        }
+                        self.log(f"Backtest reports generated: {new_reports}")
+
                     self.log("Backtest finished successfully.")
                 except Exception as e:
                     import traceback
+
                     self.log(f"Backtest execution failed: {e}")
                     print(traceback.format_exc())
 
@@ -238,34 +316,53 @@ class TradeManager:
         def monitor_target():
             """Polls the strategy for state updates while it is running."""
             import time
+
             while self.is_running:
                 try:
-                    if self.active_strategy and hasattr(self.active_strategy, 'get_datetime'):
+                    if self.active_strategy and hasattr(
+                        self.active_strategy, "get_datetime"
+                    ):
                         # Only update if the strategy is actually initialized and running
                         # Note: We use a try-except because LumiBot methods might fail if not ready
                         try:
                             cash = float(self.active_strategy.get_cash())
                             value = float(self.active_strategy.portfolio_value)
-                            
+
                             # Get symbols from the strategy
-                            symbols = getattr(self.active_strategy, 'symbols', [])
+                            symbols = getattr(self.active_strategy, "symbols", [])
                             positions_data = []
                             for symbol in symbols:
                                 pos = self.active_strategy.get_position(symbol)
                                 if pos:
-                                    positions_data.append({
-                                        "symbol": symbol,
-                                        "quantity": float(pos.quantity),
-                                        "average_price": float(pos.average_price),
-                                        "current_price": float(self.active_strategy.get_last_price(symbol)) if hasattr(self.active_strategy, 'get_last_price') else 0.0,
-                                        "unrealized_pl": float(pos.unrealized_pl) if hasattr(pos, 'unrealized_pl') else 0.0,
-                                        "unrealized_plpc": float(pos.unrealized_plpc) if hasattr(pos, 'unrealized_plpc') else 0.0,
-                                    })
-                            
+                                    positions_data.append(
+                                        {
+                                            "symbol": symbol,
+                                            "quantity": float(pos.quantity),
+                                            "average_price": float(pos.average_price),
+                                            "current_price": float(
+                                                self.active_strategy.get_last_price(
+                                                    symbol
+                                                )
+                                            )
+                                            if hasattr(
+                                                self.active_strategy, "get_last_price"
+                                            )
+                                            else 0.0,
+                                            "unrealized_pl": float(pos.unrealized_pl)
+                                            if hasattr(pos, "unrealized_pl")
+                                            else 0.0,
+                                            "unrealized_plpc": float(
+                                                pos.unrealized_plpc
+                                            )
+                                            if hasattr(pos, "unrealized_plpc")
+                                            else 0.0,
+                                        }
+                                    )
+
                             # Sync orders
                             lumi_orders = self.active_strategy.get_orders()
                             current_order_ids = [o["id"] for o in self.state["orders"]]
-                            
+
                             for o in lumi_orders:
                                 order_id = str(o.identifier)
                                 if order_id not in current_order_ids:
@@ -276,32 +373,44 @@ class TradeManager:
                                         "quantity": float(o.quantity),
                                         "price": float(o.price) if o.price else 0.0,
                                         "status": str(o.status),
-                                        "timestamp": self.active_strategy.get_datetime().isoformat()
+                                        "timestamp": self.active_strategy.get_datetime().isoformat(),
                                     }
                                     self.add_order(order_info)
-                                    self.log(f"New Order: {order_info['action']} {order_info['quantity']} {order_info['symbol']} @ {order_info['price']}")
+                                    self.log(
+                                        f"New Order: {order_info['action']} {order_info['quantity']} {order_info['symbol']} @ {order_info['price']}"
+                                    )
                                 else:
                                     # Update status of existing orders if they changed
                                     for existing in self.state["orders"]:
-                                        if existing["id"] == order_id and existing["status"] != str(o.status):
+                                        if existing["id"] == order_id and existing[
+                                            "status"
+                                        ] != str(o.status):
                                             existing["status"] = str(o.status)
-                                            self.log(f"Order Update: {order_id} is now {str(o.status)}")
+                                            self.log(
+                                                f"Order Update: {order_id} is now {str(o.status)}"
+                                            )
 
-                            market_status = "open" if self.active_strategy.get_datetime().weekday() < 5 else "closed"
-                            self.update_portfolio(cash, value, positions_data, market_status=market_status)
+                            market_status = (
+                                "open"
+                                if self.active_strategy.get_datetime().weekday() < 5
+                                else "closed"
+                            )
+                            self.update_portfolio(
+                                cash, value, positions_data, market_status=market_status
+                            )
                         except:
-                            pass # Might not be fully initialized yet
+                            pass  # Might not be fully initialized yet
                 except Exception as e:
                     print(f"Monitor error: {e}")
-                time.sleep(1) # Poll every 1 second
+                time.sleep(1)  # Poll every 1 second
 
         self.is_running = True
         self.update_status("running")
-        
+
         # Start both strategy and monitor
         self.strategy_thread = threading.Thread(target=run_target, daemon=True)
         self.monitor_thread = threading.Thread(target=monitor_target, daemon=True)
-        
+
         self.strategy_thread.start()
         self.monitor_thread.start()
         return True
@@ -310,12 +419,12 @@ class TradeManager:
         """Stop the running strategy."""
         self.log("Stopping strategy...")
         self.update_status("stopping")
-        
-        if hasattr(self, 'trader') and self.trader:
+
+        if hasattr(self, "trader") and self.trader:
             try:
                 # In newer LumiBot versions, we can stop the trader
                 # If not available, we at least mark it as not running
-                if hasattr(self.trader, 'stop_all'):
+                if hasattr(self.trader, "stop_all"):
                     self.trader.stop_all()
             except Exception as e:
                 self.log(f"Error stopping trader: {e}")
@@ -467,18 +576,22 @@ class TradeManager:
                 symbols = train_config.get("symbols", ["SPY", "AAPL", "MSFT"])
                 train_days = train_config.get("train_days", 252)
                 target_horizon = train_config.get("target_horizon", 5)
+                interval = train_config.get("interval", "1d")
 
                 # 1. 加载数据 (20%)
                 self.rolling_update_status["progress"] = 10
-                self.rolling_update_status["message"] = "加载数据..."
+                self.rolling_update_status["message"] = f"加载数据 ({interval})..."
 
-                adapter = QlibDataAdapter()
+                adapter = QlibDataAdapter(interval=interval)
                 end_date = datetime.now()
+                # 增加一点缓冲，确保覆盖足够的数据，特别是对于小时数据
                 start_date = end_date - timedelta(days=train_days + 60)
 
                 # 尝试获取新数据
                 try:
-                    adapter.fetch_and_store(symbols, start_date, end_date, update_mode="append")
+                    adapter.fetch_and_store(
+                        symbols, start_date, end_date, update_mode="append"
+                    )
                 except Exception as e:
                     self.log(f"获取新数据失败（将使用现有数据）: {e}")
 
@@ -500,14 +613,19 @@ class TradeManager:
 
                 if isinstance(df.index, pd.MultiIndex):
                     close_prices = df["close"].unstack("symbol")
-                    future_returns = close_prices.pct_change(target_horizon).shift(-target_horizon)
+                    future_returns = close_prices.pct_change(target_horizon).shift(
+                        -target_horizon
+                    )
                     target = future_returns.stack().reindex(features.index)
                 else:
-                    target = df["close"].pct_change(target_horizon).shift(-target_horizon)
+                    target = (
+                        df["close"].pct_change(target_horizon).shift(-target_horizon)
+                    )
                     target = target.reindex(features.index)
 
                 # 移除 NaN
                 import numpy as np
+
                 valid_mask = ~(features.isna().any(axis=1) | target.isna())
                 features = features[valid_mask]
                 target = target[valid_mask]
@@ -531,23 +649,29 @@ class TradeManager:
                 # 5. 评估并保存 (100%)
                 self.rolling_update_status["message"] = "保存模型..."
                 metrics = trainer.evaluate(X_valid, y_valid)
-                trainer.metadata.update({
-                    "symbols": symbols,
-                    "train_days": train_days,
-                    "ic": metrics["ic"],
-                    "icir": metrics["icir"],
-                    "rolling_update": True,
-                    "updated_at": datetime.now().isoformat(),
-                })
+                trainer.metadata.update(
+                    {
+                        "symbols": symbols,
+                        "train_days": train_days,
+                        "interval": interval,
+                        "ic": metrics["ic"],
+                        "icir": metrics["icir"],
+                        "rolling_update": True,
+                        "updated_at": datetime.now().isoformat(),
+                    }
+                )
 
                 model_path = trainer.save()
                 self.rolling_update_status["progress"] = 100
-                self.rolling_update_status["message"] = f"完成！模型: {model_path.name}, IC: {metrics['ic']:.4f}"
+                self.rolling_update_status["message"] = (
+                    f"完成！模型: {model_path.name}, IC: {metrics['ic']:.4f}"
+                )
 
                 self.log(f"Rolling 更新完成: {model_path.name}, IC={metrics['ic']:.4f}")
 
             except Exception as e:
                 import traceback
+
                 self.rolling_update_status["message"] = f"错误: {e}"
                 self.log(f"Rolling 更新失败: {e}")
                 traceback.print_exc()

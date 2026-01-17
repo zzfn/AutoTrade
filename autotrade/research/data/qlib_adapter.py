@@ -32,8 +32,11 @@ class QlibDataAdapter:
         self,
         data_dir: str | Path = "data/qlib",
         provider: BaseDataProvider | None = None,
+        interval: str = "1d",
     ):
-        self.data_dir = Path(data_dir)
+        self.interval = interval
+        self.base_dir = Path(data_dir)
+        self.data_dir = self.base_dir / interval
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
         # 子目录结构
@@ -73,10 +76,10 @@ class QlibDataAdapter:
         Returns:
             包含处理结果的字典
         """
-        logger.info(f"开始获取数据: {symbols}, {start_date} - {end_date}")
+        logger.info(f"开始获取数据 ({self.interval}): {symbols}, {start_date} - {end_date}")
 
         # 1. 获取原始数据
-        df = self.provider.fetch_data(symbols, start_date, end_date)
+        df = self.provider.fetch_data(symbols, start_date, end_date, interval=self.interval)
 
         if df.empty:
             return {"status": "error", "message": "未获取到数据"}
@@ -193,7 +196,9 @@ class QlibDataAdapter:
         else:
             dates = df.index.unique()
 
-        calendar_file = self.calendars_dir / "day.txt"
+        # 根据频率选择日历文件名
+        cal_name = "day.txt" if self.interval == "1d" else "hour.txt"
+        calendar_file = self.calendars_dir / cal_name
 
         # 加载现有日历
         existing_dates = set()
@@ -202,15 +207,16 @@ class QlibDataAdapter:
                 existing_dates = set(line.strip() for line in f)
 
         # 合并并排序
+        format_str = "%Y-%m-%d" if self.interval == "1d" else "%Y-%m-%d %H:%M:%S"
         all_dates = sorted(
             existing_dates
-            | set(pd.to_datetime(d).strftime("%Y-%m-%d") for d in dates)
+            | set(pd.to_datetime(d).strftime(format_str) for d in dates)
         )
 
         with open(calendar_file, "w") as f:
             f.write("\n".join(all_dates))
 
-        logger.debug(f"更新日历: {len(all_dates)} 个交易日")
+        logger.debug(f"更新日历 ({self.interval}): {len(all_dates)} 条记录")
 
     def _update_instruments(
         self, symbols: list[str], start_date: datetime, end_date: datetime

@@ -1,7 +1,8 @@
-# Spec: Directory Structure Refactor
+# structure Specification
 
-## MODIFIED Requirements
-
+## Purpose
+TBD - created by archiving change scaffold-project-structure. Update Purpose after archive.
+## Requirements
 ### Requirement: Root-Level Package Separation
 
 The `autotrade` source code MUST be organized into `research`, `execution`, and `shared` submodules to enforce strict separation of concerns.
@@ -29,3 +30,4 @@ Common utilities MUST be located in `autotrade/shared`.
 GIVEN a strategy in `execution` needs configuration
 WHEN it imports config
 THEN it SHOULD import from `autotrade.shared.config`, not `autotrade.config` directly.
+

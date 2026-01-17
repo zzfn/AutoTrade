@@ -199,7 +199,9 @@ class TestLightGBMTrainer:
 
         # 目标变量与特征相关
         y = pd.Series(
-            0.3 * X["feature_1"] + 0.5 * X["feature_2"] + np.random.randn(n_samples) * 0.1
+            0.3 * X["feature_1"]
+            + 0.5 * X["feature_2"]
+            + np.random.randn(n_samples) * 0.1
         )
 
         return X, y
@@ -340,25 +342,25 @@ class TestQlibMLStrategy:
 
     def test_strategy_imports(self):
         """测试策略可以导入"""
-        from autotrade.strategies import QlibMLStrategy
+        from autotrade.execution.strategies import QlibMLStrategy
 
         assert QlibMLStrategy is not None
 
     def test_strategy_registry(self):
         """测试策略注册表"""
-        from autotrade.strategies import STRATEGY_REGISTRY, get_strategy_class
+        from autotrade.execution.strategies import STRATEGY_REGISTRY, get_strategy_class
 
         assert "momentum" in STRATEGY_REGISTRY
         assert "qlib_ml" in STRATEGY_REGISTRY
 
         ml_class = get_strategy_class("qlib_ml")
-        from autotrade.strategies import QlibMLStrategy
+        from autotrade.execution.strategies import QlibMLStrategy
 
         assert ml_class == QlibMLStrategy
 
     def test_default_parameters(self):
         """测试默认参数"""
-        from autotrade.strategies import QlibMLStrategy
+        from autotrade.execution.strategies import QlibMLStrategy
 
         params = QlibMLStrategy.parameters
 

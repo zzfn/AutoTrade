@@ -26,6 +26,7 @@ class BaseDataProvider(ABC):
         symbols: list[str],
         start_date: datetime,
         end_date: datetime,
+        interval: str = "1d",
     ) -> pd.DataFrame:
         """
         获取历史数据
@@ -34,6 +35,7 @@ class BaseDataProvider(ABC):
             symbols: 股票代码列表
             start_date: 开始日期
             end_date: 结束日期
+            interval: 频率 ('1d' 或 '1h')
 
         Returns:
             包含 OHLCV 数据的 DataFrame，MultiIndex: (datetime, symbol)
@@ -88,6 +90,7 @@ class AlpacaDataProvider(BaseDataProvider):
         symbols: list[str],
         start_date: datetime,
         end_date: datetime,
+        interval: str = "1d",
     ) -> pd.DataFrame:
         """
         从 Alpaca 获取历史数据
@@ -96,12 +99,19 @@ class AlpacaDataProvider(BaseDataProvider):
             DataFrame with columns: open, high, low, close, volume
             MultiIndex: (datetime, symbol)
         """
-        logger.info(f"从 Alpaca 获取数据: {symbols}, {start_date} - {end_date}")
+        logger.info(f"从 Alpaca 获取数据: {symbols}, {start_date} - {end_date}, interval={interval}")
 
         client = self._get_client()
+        
+        # 映射 interval 到 Alpaca TimeFrame
+        if interval == "1h":
+            tf = TimeFrame.Hour
+        else:
+            tf = TimeFrame.Day
+
         request = StockBarsRequest(
             symbol_or_symbols=symbols,
-            timeframe=TimeFrame.Day,
+            timeframe=tf,
             start=start_date,
             end=end_date,
         )
@@ -162,6 +172,7 @@ class YFinanceDataProvider(BaseDataProvider):
         symbols: list[str],
         start_date: datetime,
         end_date: datetime,
+        interval: str = "1d",
     ) -> pd.DataFrame:
         """
         从 YFinance 获取历史数据
@@ -170,16 +181,19 @@ class YFinanceDataProvider(BaseDataProvider):
             DataFrame with columns: open, high, low, close, volume
             MultiIndex: (datetime, symbol)
         """
-        logger.info(f"从 YFinance 获取数据: {symbols}, {start_date} - {end_date}")
+        logger.info(f"从 YFinance 获取数据: {symbols}, {start_date} - {end_date}, interval={interval}")
 
         all_data = []
 
         for symbol in symbols:
             try:
                 ticker = yf.Ticker(symbol)
+                
+                # YFinance interval format is '1d', '1h', etc.
                 hist = ticker.history(
                     start=start_date.strftime("%Y-%m-%d"),
                     end=end_date.strftime("%Y-%m-%d"),
+                    interval=interval,
                 )
 
                 if hist.empty:
@@ -205,7 +219,9 @@ class YFinanceDataProvider(BaseDataProvider):
 
                 # 重置索引
                 hist = hist.reset_index()
-                hist = hist.rename(columns={"Date": "timestamp"})
+                # YFinance 索引列名在不同 interval 下可能不同
+                timestamp_col = "Date" if "Date" in hist.columns else "Datetime"
+                hist = hist.rename(columns={timestamp_col: "timestamp"})
                 hist["timestamp"] = pd.to_datetime(hist["timestamp"]).dt.tz_localize(
                     None
                 )

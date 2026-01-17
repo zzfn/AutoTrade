@@ -38,9 +38,16 @@ class MomentumStrategy(Strategy):
         self.lookback_period = self.parameters.get("lookback_period", 40)
         self.sma_fast = self.parameters.get("sma_fast", 10)
         self.sma_slow = self.parameters.get("sma_slow", 30)
+        
+        # 数据频率参数: 'day' 或 'hour'
+        self.interval = self.parameters.get("interval", "day")
+        if self.interval == "1h":
+            self.interval = "hour"
+        elif self.interval == "1d":
+            self.interval = "day"
 
         # 策略初始化完成日志（使用框架自带日志）
-        self.log_message(f"Strategy initialized for symbols: {self.symbols}")
+        self.log_message(f"Strategy initialized for symbols: {self.symbols} (Interval: {self.interval})")
 
     def on_trading_iteration(self):
         """核心交易逻辑 - 支持多标的"""
@@ -49,6 +56,9 @@ class MomentumStrategy(Strategy):
             if total_portfolio_value is None or total_portfolio_value == 0:
                 total_portfolio_value = self.get_cash()
             
+            if not self.symbols:
+                return
+
             # 等权重预算，预留 5% 现金缓冲
             target_allocation = (total_portfolio_value * 0.95) / len(self.symbols)
 
@@ -67,7 +77,7 @@ class MomentumStrategy(Strategy):
         """
         try:
             # 1. 获取数据
-            history = self.get_historical_prices(symbol, self.lookback_period, "day")
+            history = self.get_historical_prices(symbol, self.lookback_period, self.interval)
             if history is None or history.df.empty:
                 return
             
@@ -97,10 +107,15 @@ class MomentumStrategy(Strategy):
                     shares_to_buy = int(amount_to_buy / price)
                     
                     cash = self.get_cash()
-                    if shares_to_buy > 0 and (shares_to_buy * price) <= cash:
-                        self.log_message(f"BUY Signal for {symbol}: SMA Fast {sma_fast_val:.2f} > Slow {sma_slow_val:.2f}")
-                        order = self.create_order(symbol, shares_to_buy, "buy")
-                        self.submit_order(order)
+                    if shares_to_buy > 0:
+                        buy_cost = shares_to_buy * price
+                        if buy_cost > cash:
+                            shares_to_buy = int(cash / price)
+                            
+                        if shares_to_buy > 0:
+                            self.log_message(f"BUY Signal for {symbol}: SMA Fast {sma_fast_val:.2f} > Slow {sma_slow_val:.2f}")
+                            order = self.create_order(symbol, shares_to_buy, "buy")
+                            self.submit_order(order)
 
             elif sma_fast_val < sma_slow_val:
                 # Sell Signal - 死叉全额清仓
