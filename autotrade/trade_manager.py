@@ -1,6 +1,14 @@
+import os
 import threading
+import yaml
 from datetime import datetime
 from typing import Any
+
+from lumibot.backtesting import YahooDataBacktesting
+from lumibot.brokers import Alpaca
+from lumibot.traders import Trader
+
+from autotrade.strategies.momentum_strategy import MomentumStrategy
 
 
 class TradeManager:
@@ -37,6 +45,120 @@ class TradeManager:
     def set_strategy(self, strategy_instance):
         """Set the strategy instance to be managed."""
         self.active_strategy = strategy_instance
+
+    def initialize_and_start(self):
+        """Initialize the broker, strategy, and trader, then start the thread."""
+        if self.is_running:
+            return {"status": "already_running"}
+
+        # 1. Load credentials
+        api_key = os.getenv("ALPACA_API_KEY")
+        secret_key = os.getenv("ALPACA_API_SECRET")
+        paper_trading = os.getenv("ALPACA_PAPER", "True").lower() == "true"
+
+        if not api_key or not secret_key:
+            self.log("错误: 环境变量中未找到 Alpaca 凭证 (ALPACA_API_KEY, ALPACA_API_SECRET)。")
+            return {"status": "error", "message": "缺少凭证"}
+
+        try:
+            # 2. Setup Broker
+            broker = Alpaca(
+                {"API_KEY": api_key, "API_SECRET": secret_key, "PAPER": paper_trading}
+            )
+
+            # 3. Load symbols from config
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            config_path = os.path.join(base_dir, "../configs/universe.yaml")
+            symbols = ["SPY"]  # Default
+            
+            try:
+                if os.path.exists(config_path):
+                    with open(config_path, "r") as f:
+                        config = yaml.safe_load(f)
+                        if config and "symbols" in config:
+                            symbols = config["symbols"]
+                            self.log(f"Loaded symbols from config: {symbols}")
+                        else:
+                            self.log("Config file found but no 'symbols' key. Using default.")
+                else:
+                    self.log(f"Config file not found at {config_path}. Using default symbols.")
+            except Exception as e:
+                self.log(f"Error reading config file: {e}. Using default symbols.")
+
+            self.log(f"Starting strategy for symbols: {symbols}")
+
+            # 4. Create Strategy
+            strategy_params = {
+                "symbols": symbols,
+                "sleeptime": "10S",
+                "lookback_period": 60,
+            }
+            strategy = MomentumStrategy(broker=broker, parameters=strategy_params)
+
+            # 5. Create Trader and register
+            trader = Trader()
+            trader.add_strategy(strategy)
+
+            self.set_strategy(strategy)
+
+            # 6. Start the logic
+            started = self.start_strategy(runner=trader.run_all)
+            return {"status": "started" if started else "failed"}
+
+        except Exception as e:
+            self.log(f"Failed to setup strategy: {e}")
+            return {"status": "error", "message": str(e)}
+
+    def run_backtest(self, params: dict):
+        """Run a backtest in a separate thread."""
+
+        def _backtest_task():
+            try:
+                self.log("Starting backtest...")
+                
+                # 1. Parse dates
+                backtesting_start = datetime.strptime(
+                    params.get("start_date", "2023-01-01"), "%Y-%m-%d"
+                )
+                backtesting_end = datetime.strptime(
+                    params.get("end_date", "2023-01-31"), "%Y-%m-%d"
+                )
+                
+                # 2. Parse symbols
+                symbol_input = params.get("symbol", "SPY")
+                symbols = [s.strip() for s in symbol_input.split(",") if s.strip()]
+                if not symbols:
+                    symbols = ["SPY"]
+
+                self.log(f"Backtesting {symbols} from {backtesting_start} to {backtesting_end}")
+
+                # 3. Execute backtest
+                try:
+                    # MomentumStrategy.backtest is a blocking call
+                    MomentumStrategy.backtest(
+                        YahooDataBacktesting,
+                        backtesting_start,
+                        backtesting_end,
+                        benchmark_asset=symbols[0], 
+                        parameters={
+                            "symbols": symbols,
+                            "lookback_period": 60,
+                            "sleeptime": "0S"
+                        },
+                    )
+                    self.log("Backtest finished successfully.")
+                except Exception as e:
+                    import traceback
+                    self.log(f"Backtest execution failed: {e}")
+                    print(traceback.format_exc())
+
+            except Exception as e:
+                self.log(f"Backtest error: {e}")
+
+        # Start backtest in background thread
+        thread = threading.Thread(target=_backtest_task, daemon=True)
+        thread.start()
+        return {"status": "backtest_started"}
 
     def start_strategy(self, runner=None):
         """Start the strategy in a separate thread and begin monitoring."""
