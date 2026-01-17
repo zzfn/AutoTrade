@@ -14,7 +14,13 @@
             <div className="w-8 h-8 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin"></div>
             <div className="text-slate-400 text-sm font-medium">
               正在连接交易引擎...
+              <span className="text-xs ml-2 opacity-50">
+                ({connectionStatus})
+              </span>
             </div>
+            {connectionStatus === "disconnected" && (
+              <div className="text-rose-400 text-xs">重新连接中...</div>
+            )}
           </div>
         </div>
       );

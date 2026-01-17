@@ -517,7 +517,7 @@ class TradeManager:
         """获取当前策略配置"""
         return {
             "strategy_type": self.strategy_type,
-            "ml_config": self.ml_config,
+            "ml_config": self.ml_config.copy(),
             "available_strategies": ["momentum", "qlib_ml"],
             "is_running": self.is_running,
             "status": self.state["status"],

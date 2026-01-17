@@ -17,6 +17,13 @@ from autotrade.trade_manager import TradeManager
 
 load_dotenv()
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
+
 # Monkey patch signal.signal to prevent ValueError in non-main threads
 _original_signal = signal.signal
 
@@ -36,18 +43,31 @@ signal.signal = _thread_safe_signal
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """管理交易策略生命周期的上下文管理器"""
-    logging.info("正在执行交易策略生命周期启动...")
-    try:
-        # 启动策略
-        result = tm.initialize_and_start()
-        logging.info(f"策略启动结果: {result}")
-    except Exception as e:
-        logging.error(f"策略启动失败: {e}")
+    logger.info("正在执行交易策略生命周期启动...")
+    
+    # 将初始化放在后台任务中，以免阻塞服务器启动
+    async def startup_task():
+        try:
+            # 等待一小会儿，确保服务器已经开始监听
+            await asyncio.sleep(1)
+            logger.info("后台线程初始化交易策略...")
+            # 使用 run_in_executor 避免同步初始化代码阻塞 asyncio 事件循环
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, tm.initialize_and_start)
+            logger.info(f"策略启动结果: {result}")
+        except Exception as e:
+            logger.error(f"后台策略启动失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
 
+    # 启动后台初始化任务
+    init_task = asyncio.create_task(startup_task())
+    
     yield  # 这里是应用运行期间
 
     # 应用关闭时的清理逻辑
-    logging.info("正在执行策略生命周期关闭清理...")
+    logger.info("正在执行策略生命周期关闭清理...")
+    init_task.cancel()  # 如果还在初始化则取消
     tm.stop_strategy()
 
 
@@ -203,17 +223,40 @@ async def models_page(request: Request):
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
+    logger.info("WebSocket client connected")
     try:
         while True:
-            # Poll state from TM
-            state = tm.state
-            # 添加策略配置信息
-            state["strategy_config"] = tm.get_strategy_config()
-            state["rolling_update_status"] = tm.get_rolling_update_status()
-            state["data_sync_status"] = tm.get_data_sync_status()
-            await websocket.send_json(state)
+            # Poll state and create a combined dictionary for the frontend
+            # We copy tm.state members to avoid modification while serializing
+            try:
+                # Granular copy of state members
+                state = {
+                    "status": tm.state.get("status", "unknown"),
+                    "logs": list(tm.state.get("logs", [])),
+                    "orders": [dict(o) for o in tm.state.get("orders", [])],
+                    "portfolio": {
+                        "cash": tm.state.get("portfolio", {}).get("cash", 0.0),
+                        "value": tm.state.get("portfolio", {}).get("value", 0.0),
+                        "positions": [dict(p) for p in tm.state.get("portfolio", {}).get("positions", [])]
+                    },
+                    "market_status": tm.state.get("market_status", "unknown"),
+                    "last_update": tm.state.get("last_update"),
+                    "strategy_config": tm.get_strategy_config(),
+                    "rolling_update_status": tm.get_rolling_update_status().copy() if isinstance(tm.get_rolling_update_status(), dict) else tm.get_rolling_update_status(),
+                    "data_sync_status": tm.get_data_sync_status().copy() if isinstance(tm.get_data_sync_status(), dict) else tm.get_data_sync_status()
+                }
+                
+                # Use send_json which handles the serialization
+                await websocket.send_json(state)
+            except (WebSocketDisconnect, RuntimeError):
+                logger.info("WebSocket connection closed")
+                break
+            except Exception as e:
+                logger.error(f"Error preparing or sending WS data: {e}")
+                # Don't break here unless it's a critical one, but log it
+            
             await asyncio.sleep(1)  # 1Hz update
     except WebSocketDisconnect:
-        pass
+        logger.info("WebSocket client disconnected")
     except Exception as e:
-        print(f"WS Error: {e}")
+        logger.error(f"WS Connection Error: {e}")
