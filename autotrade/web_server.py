@@ -149,6 +149,16 @@ async def select_model(request: Request):
     return tm.select_model(model_name)
 
 
+@app.post("/api/models/delete")
+async def delete_model(request: Request):
+    """删除模型"""
+    data = await request.json()
+    model_name = data.get("model_name")
+    if not model_name:
+        return {"status": "error", "message": "缺少 model_name 参数"}
+    return tm.delete_model(model_name)
+
+
 @app.post("/api/models/rolling_update")
 async def start_rolling_update(request: Request):
     """启动 Rolling 模型更新"""
@@ -163,6 +173,22 @@ async def start_rolling_update(request: Request):
 async def get_rolling_update_status():
     """获取 Rolling 更新状态"""
     return tm.get_rolling_update_status()
+
+
+@app.post("/api/data/sync")
+async def start_data_sync(request: Request):
+    """启动数据同步"""
+    try:
+        config = await request.json()
+    except Exception:
+        config = None
+    return tm.start_data_sync(config)
+
+
+@app.get("/api/data/sync/status")
+async def get_data_sync_status():
+    """获取数据同步状态"""
+    return tm.get_data_sync_status()
 
 
 # ==================== 模型管理页面 ====================
@@ -184,6 +210,7 @@ async def websocket_endpoint(websocket: WebSocket):
             # 添加策略配置信息
             state["strategy_config"] = tm.get_strategy_config()
             state["rolling_update_status"] = tm.get_rolling_update_status()
+            state["data_sync_status"] = tm.get_data_sync_status()
             await websocket.send_json(state)
             await asyncio.sleep(1)  # 1Hz update
     except WebSocketDisconnect:
