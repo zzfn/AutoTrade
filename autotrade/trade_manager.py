@@ -39,12 +39,7 @@ class TradeManager:
         self.active_strategy = strategy_instance
 
     def start_strategy(self, runner=None):
-        """Start the strategy in a separate thread.
-
-        Args:
-            runner: Optional callable to execute. If None, tries calling `active_strategy.run()`,
-                    falling back to `active_strategy.run_all()` if available (e.g. Trader).
-        """
+        """Start the strategy in a separate thread and begin monitoring."""
         if self.is_running:
             return False
 
@@ -71,10 +66,75 @@ class TradeManager:
                 self.update_status("stopped")
                 self.log("Strategy stopped.")
 
-        self.strategy_thread = threading.Thread(target=run_target, daemon=True)
+        def monitor_target():
+            """Polls the strategy for state updates while it is running."""
+            import time
+            while self.is_running:
+                try:
+                    if self.active_strategy and hasattr(self.active_strategy, 'get_datetime'):
+                        # Only update if the strategy is actually initialized and running
+                        # Note: We use a try-except because LumiBot methods might fail if not ready
+                        try:
+                            cash = float(self.active_strategy.get_cash())
+                            value = float(self.active_strategy.portfolio_value)
+                            
+                            # Get symbols from the strategy
+                            symbols = getattr(self.active_strategy, 'symbols', [])
+                            positions_data = []
+                            for symbol in symbols:
+                                pos = self.active_strategy.get_position(symbol)
+                                if pos:
+                                    positions_data.append({
+                                        "symbol": symbol,
+                                        "quantity": float(pos.quantity),
+                                        "average_price": float(pos.average_price),
+                                        "current_price": float(self.active_strategy.get_last_price(symbol)) if hasattr(self.active_strategy, 'get_last_price') else 0.0,
+                                        "unrealized_pl": float(pos.unrealized_pl) if hasattr(pos, 'unrealized_pl') else 0.0,
+                                        "unrealized_plpc": float(pos.unrealized_plpc) if hasattr(pos, 'unrealized_plpc') else 0.0,
+                                    })
+                            
+                            # Sync orders
+                            lumi_orders = self.active_strategy.get_orders()
+                            current_order_ids = [o["id"] for o in self.state["orders"]]
+                            
+                            for o in lumi_orders:
+                                order_id = str(o.identifier)
+                                if order_id not in current_order_ids:
+                                    order_info = {
+                                        "id": order_id,
+                                        "symbol": o.asset.symbol,
+                                        "action": str(o.side).upper(),
+                                        "quantity": float(o.quantity),
+                                        "price": float(o.price) if o.price else 0.0,
+                                        "status": str(o.status),
+                                        "timestamp": self.active_strategy.get_datetime().isoformat()
+                                    }
+                                    self.add_order(order_info)
+                                    self.log(f"New Order: {order_info['action']} {order_info['quantity']} {order_info['symbol']} @ {order_info['price']}")
+                                else:
+                                    # Update status of existing orders if they changed
+                                    for existing in self.state["orders"]:
+                                        if existing["id"] == order_id and existing["status"] != str(o.status):
+                                            existing["status"] = str(o.status)
+                                            self.log(f"Order Update: {order_id} is now {str(o.status)}")
+
+                            market_status = "open" if self.active_strategy.get_datetime().weekday() < 5 else "closed"
+                            self.update_portfolio(cash, value, positions_data, market_status=market_status)
+                        except:
+                            pass # Might not be fully initialized yet
+                except Exception as e:
+                    print(f"Monitor error: {e}")
+                time.sleep(1) # Poll every 1 second
+
         self.is_running = True
         self.update_status("running")
+        
+        # Start both strategy and monitor
+        self.strategy_thread = threading.Thread(target=run_target, daemon=True)
+        self.monitor_thread = threading.Thread(target=monitor_target, daemon=True)
+        
         self.strategy_thread.start()
+        self.monitor_thread.start()
         return True
 
     def stop_strategy(self):
