@@ -151,40 +151,40 @@ class QlibDataAdapter:
         symbol_dir = self.features_dir / symbol
         symbol_dir.mkdir(parents=True, exist_ok=True)
 
-        # 存储时间索引
+        feature_cols = ["open", "high", "low", "close", "volume"]
         dates_file = symbol_dir / "_dates.pkl"
-        existing_dates = []
 
+        # 追加模式：加载现有数据并合并
         if update_mode == "append" and dates_file.exists():
+            # 加载现有数据为 DataFrame
             with open(dates_file, "rb") as f:
                 existing_dates = pickle.load(f)
 
-        # 合并日期
-        new_dates = df.index.tolist()
-        if update_mode == "append":
-            all_dates = sorted(set(existing_dates + new_dates))
-        else:
-            all_dates = new_dates
+            existing_data = {"timestamp": pd.to_datetime(existing_dates)}
+            for col in feature_cols:
+                feature_file = symbol_dir / f"${col}.bin"
+                if feature_file.exists():
+                    existing_data[col] = np.fromfile(feature_file, dtype=np.float32)
 
+            # 构建现有数据 DataFrame
+            if len(existing_data.get("open", [])) == len(existing_dates):
+                old_df = pd.DataFrame(existing_data).set_index("timestamp")
+                # 准备新数据
+                new_df = df[feature_cols].copy()
+                new_df.index = pd.to_datetime(new_df.index)
+                # 合并：concat + 去重，保留新数据 (keep='last')
+                combined = pd.concat([old_df, new_df]).sort_index()
+                combined = combined[~combined.index.duplicated(keep="last")]
+                df = combined
+
+        # 保存日期
         with open(dates_file, "wb") as f:
-            pickle.dump(all_dates, f)
+            pickle.dump(df.index.tolist(), f)
 
-        # 存储每个特征
-        for col in ["open", "high", "low", "close", "volume"]:
-            if col not in df.columns:
-                continue
-
-            feature_file = symbol_dir / f"${col}.bin"
-
-            if update_mode == "append" and feature_file.exists():
-                # 追加模式：加载现有数据并合并
-                existing_data = np.fromfile(feature_file, dtype=np.float32)
-                new_data = df[col].values.astype(np.float32)
-                # 简化处理：直接追加（实际应该按日期合并）
-                combined = np.concatenate([existing_data, new_data])
-                combined.tofile(feature_file)
-            else:
-                # 替换模式：直接写入
+        # 保存每个特征
+        for col in feature_cols:
+            if col in df.columns:
+                feature_file = symbol_dir / f"${col}.bin"
                 df[col].values.astype(np.float32).tofile(feature_file)
 
         logger.debug(f"存储 {symbol} 数据完成")
@@ -290,10 +290,23 @@ class QlibDataAdapter:
 
             # 加载特征
             data = {"timestamp": dates}
+            lengths = [len(dates)]
             for col in ["open", "high", "low", "close", "volume"]:
                 feature_file = symbol_dir / f"${col}.bin"
                 if feature_file.exists():
-                    data[col] = np.fromfile(feature_file, dtype=np.float32)
+                    values = np.fromfile(feature_file, dtype=np.float32)
+                    data[col] = values
+                    lengths.append(len(values))
+
+            # 防御性处理：对齐长度，避免 DataFrame 构造失败
+            min_len = min(lengths) if lengths else 0
+            if min_len == 0:
+                continue
+            if len(set(lengths)) != 1:
+                logger.warning(
+                    f"{symbol} 数据长度不一致: {lengths}，将截断到 {min_len}"
+                )
+                data = {k: v[:min_len] for k, v in data.items()}
 
             df = pd.DataFrame(data)
             df["symbol"] = symbol
@@ -312,6 +325,9 @@ class QlibDataAdapter:
 
         result = pd.concat(all_data, ignore_index=True)
         result = result.set_index(["timestamp", "symbol"])
+        # 去重以保证 (timestamp, symbol) 唯一，避免 unstack 报错
+        if result.index.has_duplicates:
+            result = result[~result.index.duplicated(keep="last")]
         result = result.sort_index()
 
         return result

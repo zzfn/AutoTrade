@@ -12,6 +12,7 @@ from typing import Optional
 import pandas as pd
 import yfinance as yf
 from alpaca.data import StockHistoricalDataClient
+from alpaca.data.enums import DataFeed
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from loguru import logger
@@ -78,6 +79,7 @@ class AlpacaDataProvider(BaseDataProvider):
                 timeframe=TimeFrame.Day,
                 start=datetime.now() - timedelta(days=5),
                 end=datetime.now() - timedelta(days=1),
+                feed=DataFeed.IEX,  # 免费账户使用 IEX 数据源
             )
             client.get_stock_bars(request)
             return True
@@ -114,6 +116,7 @@ class AlpacaDataProvider(BaseDataProvider):
             timeframe=tf,
             start=start_date,
             end=end_date,
+            feed=DataFeed.IEX,  # 免费账户使用 IEX 数据源
         )
 
         bars = client.get_stock_bars(request)
