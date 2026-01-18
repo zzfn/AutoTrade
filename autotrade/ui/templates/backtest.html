@@ -7,8 +7,8 @@
     const [params, setParams] = useState({
       start_date: "2025-01-01",
       end_date: "2025-12-31",
-      strategy_type: "momentum",
-      symbol: "TSLA",
+      strategy_type: "qlib_ml",
+      symbol: "AAPL,MSFT,GOOGL,AMZN,NVDA,META,TSLA",
       model_name: "",
       top_k: 3,
       rebalance_period: 1,
@@ -51,24 +51,7 @@
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 fade-in">
         <Card title="回测配置" className="col-span-1 h-fit">
           <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-400 mb-1.5">
-                策略选择
-              </label>
-              <select
-                className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg p-2.5 text-slate-200 focus:border-cyan-500/50 outline-none transition-colors"
-                value={params.strategy_type}
-                onChange={(e) =>
-                  setParams({ ...params, strategy_type: e.target.value })
-                }
-              >
-                <option value="momentum">动量突破策略 (Momentum)</option>
-                <option value="qlib_ml">机器学习策略 (Qlib ML)</option>
-              </select>
-            </div>
-
-            {params.strategy_type === "qlib_ml" && (
-              <div className="p-4 bg-purple-500/5 rounded-xl border border-purple-500/20 space-y-4">
+            <div className="p-4 bg-purple-500/5 rounded-xl border border-purple-500/20 space-y-4">
                 <div>
                   <label className="block text-xs font-medium text-purple-300 mb-1.5">
                     模型选择
@@ -123,7 +106,6 @@
                   </div>
                 </div>
               </div>
-            )}
 
             <div>
               <label className="block text-sm font-medium text-slate-400 mb-1.5">
