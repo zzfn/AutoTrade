@@ -51,8 +51,8 @@ class TradeManager:
         }
         self.model_manager = ModelManager()
 
-        # Rolling 更新状态
-        self.rolling_update_status = {
+        # 模型训练状态
+        self.training_status = {
             "in_progress": False,
             "progress": 0,
             "message": "",
@@ -531,9 +531,9 @@ class TradeManager:
             return {"status": "success", "model_name": model_name}
         return {"status": "error", "message": f"删除模型失败: {model_name}"}
 
-    def start_rolling_update(self, config: dict = None) -> dict:
+    def start_model_training(self, config: dict = None) -> dict:
         """
-        启动 Rolling 模型更新
+        启动模型训练
 
         Args:
             config: 可选的训练配置
@@ -541,20 +541,20 @@ class TradeManager:
         Returns:
             操作结果
         """
-        if self.rolling_update_status["in_progress"]:
-            return {"status": "error", "message": "Rolling 更新已在进行中"}
+        if self.training_status["in_progress"]:
+            return {"status": "error", "message": "模型训练已在进行中"}
 
-        def _rolling_update_task():
+        def _training_task():
             try:
                 from autotrade.research.data import QlibDataAdapter
                 from autotrade.research.features import QlibFeatureGenerator
                 from autotrade.research.models import LightGBMTrainer
                 from datetime import timedelta
 
-                self.rolling_update_status["in_progress"] = True
-                self.rolling_update_status["progress"] = 0
-                self.rolling_update_status["message"] = "开始 Rolling 更新..."
-                self.log("开始 Rolling 更新")
+                self.training_status["in_progress"] = True
+                self.training_status["progress"] = 0
+                self.training_status["message"] = "开始模型训练..."
+                self.log("开始模型训练")
 
                 # 默认配置
                 train_config = config or {}
@@ -564,8 +564,8 @@ class TradeManager:
                 interval = train_config.get("interval", "1d")
 
                 # 1. 加载数据 (20%)
-                self.rolling_update_status["progress"] = 10
-                self.rolling_update_status["message"] = f"加载数据 ({interval})..."
+                self.training_status["progress"] = 10
+                self.training_status["message"] = f"加载数据 ({interval})..."
 
                 adapter = QlibDataAdapter(interval=interval)
                 end_date = datetime.now()
@@ -581,19 +581,19 @@ class TradeManager:
                     self.log(f"获取新数据失败（将使用现有数据）: {e}")
 
                 df = adapter.load_data(symbols, start_date, end_date)
-                self.rolling_update_status["progress"] = 20
+                self.training_status["progress"] = 20
 
                 if df.empty:
                     raise ValueError("没有可用的数据")
 
                 # 2. 生成特征 (40%)
-                self.rolling_update_status["message"] = "生成特征..."
+                self.training_status["message"] = "生成特征..."
                 feature_gen = QlibFeatureGenerator(normalize=True)
                 features = feature_gen.generate(df)
-                self.rolling_update_status["progress"] = 40
+                self.training_status["progress"] = 40
 
                 # 3. 生成目标变量
-                self.rolling_update_status["message"] = "准备训练数据..."
+                self.training_status["message"] = "准备训练数据..."
                 import pandas as pd
 
                 if isinstance(df.index, pd.MultiIndex):
@@ -614,10 +614,10 @@ class TradeManager:
                 valid_mask = ~(features.isna().any(axis=1) | target.isna())
                 features = features[valid_mask]
                 target = target[valid_mask]
-                self.rolling_update_status["progress"] = 50
+                self.training_status["progress"] = 50
 
                 # 4. 训练模型 (80%)
-                self.rolling_update_status["message"] = "训练模型..."
+                self.training_status["message"] = "训练模型..."
 
                 # 分割训练/验证集 (80/20)
                 split_idx = int(len(features) * 0.8)
@@ -629,10 +629,10 @@ class TradeManager:
                     num_boost_round=300,
                 )
                 trainer.train(X_train, y_train, X_valid, y_valid)
-                self.rolling_update_status["progress"] = 80
+                self.training_status["progress"] = 80
 
                 # 5. 评估并保存 (100%)
-                self.rolling_update_status["message"] = "保存模型..."
+                self.training_status["message"] = "保存模型..."
                 metrics = trainer.evaluate(X_valid, y_valid)
                 trainer.metadata.update(
                     {
@@ -641,37 +641,37 @@ class TradeManager:
                         "interval": interval,
                         "ic": metrics["ic"],
                         "icir": metrics["icir"],
-                        "rolling_update": True,
+                        "trained_via_ui": True,
                         "updated_at": datetime.now().isoformat(),
                     }
                 )
 
                 model_path = trainer.save()
-                self.rolling_update_status["progress"] = 100
-                self.rolling_update_status["message"] = (
+                self.training_status["progress"] = 100
+                self.training_status["message"] = (
                     f"完成！模型: {model_path.name}, IC: {metrics['ic']:.4f}"
                 )
 
-                self.log(f"Rolling 更新完成: {model_path.name}, IC={metrics['ic']:.4f}")
+                self.log(f"模型训练完成: {model_path.name}, IC={metrics['ic']:.4f}")
 
             except Exception as e:
                 import traceback
 
-                self.rolling_update_status["message"] = f"错误: {e}"
-                self.log(f"Rolling 更新失败: {e}")
+                self.training_status["message"] = f"错误: {e}"
+                self.log(f"模型训练失败: {e}")
                 traceback.print_exc()
             finally:
-                self.rolling_update_status["in_progress"] = False
+                self.training_status["in_progress"] = False
 
         # 启动后台任务
-        thread = threading.Thread(target=_rolling_update_task, daemon=True)
+        thread = threading.Thread(target=_training_task, daemon=True)
         thread.start()
 
-        return {"status": "started", "message": "Rolling 更新已启动"}
+        return {"status": "started", "message": "模型训练已启动"}
 
-    def get_rolling_update_status(self) -> dict:
-        """获取 Rolling 更新状态"""
-        return self.rolling_update_status
+    def get_training_status(self) -> dict:
+        """获取模型训练状态"""
+        return self.training_status
 
     def start_data_sync(self, config: dict = None) -> dict:
         """

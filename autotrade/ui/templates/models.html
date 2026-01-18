@@ -7,7 +7,7 @@
     const [models, setModels] = React.useState([]);
     const [currentModel, setCurrentModel] = React.useState(null);
     const [strategyConfig, setStrategyConfig] = React.useState(null);
-    const [rollingStatus, setRollingStatus] = React.useState(null);
+    const [trainingStatus, setTrainingStatus] = React.useState(null);
     const [dataStatus, setDataStatus] = React.useState(null);
     const [loading, setLoading] = React.useState(true);
     const [selectedModel, setSelectedModel] = React.useState(null);
@@ -20,7 +20,7 @@
             fetch("/api/models").then((r) => r.json()),
             fetch("/api/models/current").then((r) => r.json()),
             fetch("/api/strategy/config").then((r) => r.json()),
-            fetch("/api/models/rolling_update/status").then((r) => r.json()),
+            fetch("/api/models/train/status").then((r) => r.json()),
             fetch("/api/data/sync/status").then((r) => r.json()),
           ],
         );
@@ -28,7 +28,7 @@
         setModels(modelsRes.models || []);
         setCurrentModel(currentRes.model);
         setStrategyConfig(configRes);
-        setRollingStatus(statusRes);
+        setTrainingStatus(statusRes);
         setDataStatus(dataStatusRes);
         setLoading(false);
       } catch (e) {
@@ -91,24 +91,24 @@
       }
     };
 
-    const [rollingInterval, setRollingInterval] = React.useState("1d");
-    const [rollingSymbols, setRollingSymbols] = React.useState("AAPL,MSFT,GOOGL,AMZN,NVDA,META,TSLA");
+    const [trainingInterval, setTrainingInterval] = React.useState("1d");
+    const [trainingSymbols, setTrainingSymbols] = React.useState("AAPL,MSFT,GOOGL,AMZN,NVDA,META,TSLA");
 
-    // 启动 Rolling 更新
-    const handleRollingUpdate = async () => {
+    // 启动模型训练
+    const handleTrainModel = async () => {
       try {
-        const symbols = rollingSymbols.split(",").map(s => s.trim().toUpperCase()).filter(s => s);
-        await fetch("/api/models/rolling_update", {
+        const symbols = trainingSymbols.split(",").map(s => s.trim().toUpperCase()).filter(s => s);
+        await fetch("/api/models/train", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            interval: rollingInterval,
+            interval: trainingInterval,
             symbols: symbols
           }),
         });
         loadData();
       } catch (e) {
-        console.error("启动 Rolling 更新失败:", e);
+        console.error("启动模型训练失败:", e);
       }
     };
 
@@ -118,7 +118,7 @@
     // 启动数据同步
     const handleDataSync = async () => {
       try {
-        const symbols = rollingSymbols.split(",").map(s => s.trim().toUpperCase()).filter(s => s);
+        const symbols = trainingSymbols.split(",").map(s => s.trim().toUpperCase()).filter(s => s);
         await fetch("/api/data/sync", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -308,30 +308,30 @@
           </div>
         </Card>
 
-        {/* Rolling 更新 */}
-        <Card title="滚动训练" className="col-span-1">
+        {/* 模型训练 */}
+        <Card title="训练模型" className="col-span-1">
           <div className="flex flex-col gap-6">
             <div className="text-sm text-slate-400">
-              Rolling 更新将使用最新数据重新训练模型。你可以自定义训练频率和标的池。
+              使用最新数据训练新模型。你可以自定义数据频率和标的池。
             </div>
 
-            {rollingStatus?.in_progress ? (
+            {trainingStatus?.in_progress ? (
               <div className="space-y-4 p-4 bg-slate-800/30 rounded-xl border border-slate-700/30">
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-slate-400">训练进度</span>
                   <span className="text-purple-400 font-bold">
-                    {rollingStatus.progress}%
+                    {trainingStatus.progress}%
                   </span>
                 </div>
                 <div className="h-2.5 bg-slate-800 rounded-full overflow-hidden border border-slate-700/50">
                   <div
                     className="h-full bg-gradient-to-r from-purple-500 to-indigo-500 transition-all duration-1000 shadow-[0_0_10px_rgba(168,85,247,0.4)]"
-                    style={{ width: `${rollingStatus.progress}%` }}
+                    style={{ width: `${trainingStatus.progress}%` }}
                   ></div>
                 </div>
                 <div className="flex items-center gap-2 text-xs text-slate-500 italic">
                   <div className="w-1.5 h-1.5 bg-purple-500 rounded-full animate-ping"></div>
-                  {rollingStatus.message}
+                  {trainingStatus.message}
                 </div>
               </div>
             ) : (
@@ -343,8 +343,8 @@
                       数据频率
                     </label>
                     <select
-                      value={rollingInterval}
-                      onChange={(e) => setRollingInterval(e.target.value)}
+                      value={trainingInterval}
+                      onChange={(e) => setTrainingInterval(e.target.value)}
                       className="w-full bg-slate-900/50 border border-slate-700/50 rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-purple-500/50 transition-all"
                     >
                       <option value="1d">日线 (Daily)</option>
@@ -353,11 +353,11 @@
                   </div>
                   <div>
                     <label className="block text-xs text-slate-500 mb-1.5 font-bold uppercase tracking-wider">
-                      再平衡周期 (天)
+                      训练天数
                     </label>
                     <input
                       type="number"
-                      defaultValue={5}
+                      defaultValue={252}
                       className="w-full bg-slate-900/50 border border-slate-700/50 rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-purple-500/50"
                     />
                   </div>
@@ -369,8 +369,8 @@
                   </label>
                   <input
                     type="text"
-                    value={rollingSymbols}
-                    onChange={(e) => setRollingSymbols(e.target.value)}
+                    value={trainingSymbols}
+                    onChange={(e) => setTrainingSymbols(e.target.value)}
                     placeholder="例如: AAPL,MSFT,TSLA"
                     className="w-full bg-slate-900/50 border border-slate-700/50 rounded-xl px-4 py-2.5 font-mono text-xs text-purple-300 outline-none focus:border-purple-500/50 transition-all shadow-inner"
                   />
@@ -379,17 +379,17 @@
                   </p>
                 </div>
 
-                {rollingStatus?.message && !rollingStatus.message.includes("Rolling 更新...") && (
-                   <div className={`p-3 rounded-lg text-xs border ${rollingStatus.message.includes("错误") ? "bg-rose-500/10 border-rose-500/20 text-rose-400" : "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"}`}>
-                     {rollingStatus.message}
+                {trainingStatus?.message && !trainingStatus.message.includes("开始模型训练") && (
+                   <div className={`p-3 rounded-lg text-xs border ${trainingStatus.message.includes("错误") ? "bg-rose-500/10 border-rose-500/20 text-rose-400" : "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"}`}>
+                     {trainingStatus.message}
                    </div>
                 )}
 
                 <button
-                  onClick={handleRollingUpdate}
+                  onClick={handleTrainModel}
                   className="w-full py-3 px-6 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-bold text-sm shadow-lg shadow-purple-500/20 hover:shadow-purple-500/40 hover:scale-[1.01] active:scale-[0.98] transition-all"
                 >
-                  🚀 启动并行滚动训练
+                  🚀 开始训练模型
                 </button>
               </div>
             )}
@@ -400,7 +400,7 @@
         <Card title="可用模型" className="col-span-1 md:col-span-3">
           {models.length === 0 ? (
             <div className="text-slate-500 text-center py-12 italic border border-dashed border-slate-700/50 rounded-xl bg-slate-800/20">
-              暂无可用模型。请先运行训练脚本或 Rolling 更新。
+              暂无可用模型。请先点击上方"开始训练模型"按钮训练新模型。
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

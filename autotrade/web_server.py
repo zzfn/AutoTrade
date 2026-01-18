@@ -184,20 +184,20 @@ async def delete_model(request: Request):
     return tm.delete_model(model_name)
 
 
-@app.post("/api/models/rolling_update")
-async def start_rolling_update(request: Request):
-    """启动 Rolling 模型更新"""
+@app.post("/api/models/train")
+async def start_model_training(request: Request):
+    """启动模型训练"""
     try:
         config = await request.json()
     except Exception:
         config = None
-    return tm.start_rolling_update(config)
+    return tm.start_model_training(config)
 
 
-@app.get("/api/models/rolling_update/status")
-async def get_rolling_update_status():
-    """获取 Rolling 更新状态"""
-    return tm.get_rolling_update_status()
+@app.get("/api/models/train/status")
+async def get_training_status():
+    """获取模型训练状态"""
+    return tm.get_training_status()
 
 
 @app.post("/api/data/sync")
@@ -247,7 +247,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     "market_status": tm.state.get("market_status", "unknown"),
                     "last_update": tm.state.get("last_update"),
                     "strategy_config": tm.get_strategy_config(),
-                    "rolling_update_status": tm.get_rolling_update_status().copy() if isinstance(tm.get_rolling_update_status(), dict) else tm.get_rolling_update_status(),
+                    "training_status": tm.get_training_status().copy() if isinstance(tm.get_training_status(), dict) else tm.get_training_status(),
                     "data_sync_status": tm.get_data_sync_status().copy() if isinstance(tm.get_data_sync_status(), dict) else tm.get_data_sync_status()
                 }
                 
