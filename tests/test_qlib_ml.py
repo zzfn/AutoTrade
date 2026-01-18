@@ -341,22 +341,10 @@ class TestQlibMLStrategy:
     """QlibMLStrategy 测试"""
 
     def test_strategy_imports(self):
-        """测试策略可以导入"""
+        """测试策略可以正确导入"""
         from autotrade.execution.strategies import QlibMLStrategy
 
         assert QlibMLStrategy is not None
-
-    def test_strategy_registry(self):
-        """测试策略注册表"""
-        from autotrade.execution.strategies import STRATEGY_REGISTRY, get_strategy_class
-
-        assert "momentum" in STRATEGY_REGISTRY
-        assert "qlib_ml" in STRATEGY_REGISTRY
-
-        ml_class = get_strategy_class("qlib_ml")
-        from autotrade.execution.strategies import QlibMLStrategy
-
-        assert ml_class == QlibMLStrategy
 
     def test_default_parameters(self):
         """测试默认参数"""

@@ -72,7 +72,7 @@ model:
 
 # 策略配置
 strategy:
-  # 策略类型: momentum, qlib_ml
+  # 策略类型（固定为 ML 策略）
   type: qlib_ml
 
   # ML 策略参数

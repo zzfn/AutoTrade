@@ -57,24 +57,6 @@
       }
     };
 
-    // 切换策略类型
-    const handleStrategyTypeChange = async (type) => {
-      try {
-        const res = await fetch("/api/strategy/type", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ strategy_type: type }),
-        });
-        const result = await res.json();
-        if (result.status === "error") {
-          alert(result.message);
-        }
-        loadData();
-      } catch (e) {
-        console.error("切换策略失败:", e);
-      }
-    };
-
     // 启动策略
     const handleStartStrategy = async () => {
       try {
@@ -209,41 +191,11 @@
               </div>
             </div>
 
-            {/* 策略类型选择 */}
-            <div className={strategyConfig?.is_running ? "opacity-50 pointer-events-none" : ""}>
-              <label className="block text-sm text-slate-400 mb-2">
-                策略类型 {strategyConfig?.is_running && <span className="text-[10px] text-amber-500 ml-1">(请先停止以修改)</span>}
-              </label>
-              <div className="flex gap-3">
-                <button
-                  onClick={() => handleStrategyTypeChange("momentum")}
-                  className={`flex-1 py-3 px-4 rounded-xl text-sm font-medium transition-all ${
-                    strategyConfig?.strategy_type === "momentum"
-                      ? "bg-cyan-500 text-slate-900 shadow-lg shadow-cyan-500/20"
-                      : "bg-slate-800/50 text-slate-400 hover:bg-slate-700"
-                  }`}
-                >
-                  📈 动量策略
-                </button>
-                <button
-                  onClick={() => handleStrategyTypeChange("qlib_ml")}
-                  className={`flex-1 py-3 px-4 rounded-xl text-sm font-medium transition-all ${
-                    strategyConfig?.strategy_type === "qlib_ml"
-                      ? "bg-purple-500 text-white shadow-lg shadow-purple-500/20"
-                      : "bg-slate-800/50 text-slate-400 hover:bg-slate-700"
-                  }`}
-                >
-                  🤖 ML 策略
-                </button>
-              </div>
-            </div>
-
             {/* ML 策略参数 */}
-            {strategyConfig?.strategy_type === "qlib_ml" && (
-              <div className="space-y-4 p-4 bg-purple-500/5 rounded-xl border border-purple-500/20">
-                <div className="text-sm font-medium text-purple-300 mb-3">
-                  ML 策略参数
-                </div>
+            <div className="space-y-4 p-4 bg-purple-500/5 rounded-xl border border-purple-500/20">
+              <div className="text-sm font-medium text-purple-300 mb-3">
+                ML 策略参数
+              </div>
 
                 <div>
                   <label className="block text-xs text-slate-400 mb-1">
@@ -287,8 +239,7 @@
                     {currentModel?.name || "未选择"}
                   </div>
                 </div>
-              </div>
-            )}
+            </div>
           </div>
         </Card>
 
