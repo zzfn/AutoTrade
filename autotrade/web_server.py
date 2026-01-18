@@ -11,7 +11,6 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from autotrade.execution.strategies.momentum_strategy import MomentumStrategy
 from autotrade.trade_manager import TradeManager
 
 
@@ -132,14 +131,6 @@ async def run_backtest(request: Request):
 async def get_strategy_config():
     """获取当前策略配置"""
     return tm.get_strategy_config()
-
-
-@app.post("/api/strategy/type")
-async def set_strategy_type(request: Request):
-    """设置策略类型"""
-    data = await request.json()
-    strategy_type = data.get("strategy_type", "momentum")
-    return tm.set_strategy_type(strategy_type)
 
 
 @app.post("/api/strategy/start")

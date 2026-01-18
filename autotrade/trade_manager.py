@@ -9,11 +9,7 @@ from lumibot.backtesting import YahooDataBacktesting
 from lumibot.brokers import Alpaca
 from lumibot.traders import Trader
 
-from autotrade.execution.strategies import (
-    MomentumStrategy,
-    QlibMLStrategy,
-    get_strategy_class,
-)
+from autotrade.execution.strategies import QlibMLStrategy
 from autotrade.research.models import ModelManager
 
 
@@ -48,9 +44,8 @@ class TradeManager:
         }
 
         # ML 策略配置
-        self.strategy_type = "momentum"  # 'momentum' 或 'qlib_ml'
         self.ml_config: dict[str, Any] = {
-            "model_name": None,  # None 表示使用当前模型
+            "model_name": None,  # None 表示使用最优模型（由 ModelManager 自动选择）
             "top_k": 3,
             "rebalance_period": 1,
         }
@@ -122,33 +117,28 @@ class TradeManager:
                 self.log(f"Error reading config file: {e}. Using default symbols.")
 
             self.log(f"Starting strategy for symbols: {symbols}")
-            self.log(f"Strategy type: {self.strategy_type}")
 
-            # 4. Create Strategy based on type
+            # 4. Create ML Strategy
+            # 如果 model_name 为 None，使用 ModelManager 的当前模型（最优模型）
+            model_name = self.ml_config.get("model_name")
+            if model_name is None:
+                # 自动选择最优模型
+                model_name = self.model_manager.get_current_model()
+                if model_name:
+                    self.log(f"自动选择最优模型: {model_name}")
+                else:
+                    self.log("未找到训练好的模型，将使用默认模型")
+
             strategy_params = {
                 "symbols": symbols,
-                "sleeptime": "10S",
-                "lookback_period": 60,
+                "model_name": model_name,
+                "top_k": self.ml_config.get("top_k", 3),
+                "rebalance_period": self.ml_config.get("rebalance_period", 1),
+                "sleeptime": "1D",  # ML 策略通常是日频
             }
 
-            if self.strategy_type == "qlib_ml":
-                # ML 策略特定参数
-                strategy_params.update(
-                    {
-                        "model_name": self.ml_config.get("model_name"),
-                        "top_k": self.ml_config.get("top_k", 3),
-                        "rebalance_period": self.ml_config.get("rebalance_period", 1),
-                        "sleeptime": "1D",  # ML 策略通常是日频
-                    }
-                )
-                strategy = QlibMLStrategy(broker=broker, parameters=strategy_params)
-                self.log(
-                    f"Using QlibMLStrategy with model: {self.ml_config.get('model_name', 'current')}"
-                )
-            else:
-                # 默认动量策略
-                strategy = MomentumStrategy(broker=broker, parameters=strategy_params)
-                self.log("Using MomentumStrategy")
+            strategy = QlibMLStrategy(broker=broker, parameters=strategy_params)
+            self.log(f"使用 QlibMLStrategy，模型: {model_name or '默认'}")
 
             # 5. Create Trader and register
             self.trader = Trader()
@@ -198,9 +188,8 @@ class TradeManager:
                     f"Backtesting {symbols} from {backtesting_start} to {backtesting_end} (Interval: {interval})"
                 )
 
-                # 4. Get strategy class and execute backtest
-                strategy_type = params.get("strategy_type", self.strategy_type)
-                strategy_class = get_strategy_class(strategy_type)
+                # 4. Execute backtest with ML strategy
+                strategy_class = QlibMLStrategy
 
                 try:
                     # Map interval to LumiBot frequency
@@ -208,26 +197,19 @@ class TradeManager:
                     lumibot_interval = "hour" if interval == "1h" else "day"
 
                     # Strategy.backtest is a blocking call
+                    # 如果未指定模型，使用当前最优模型
+                    model_name = params.get("model_name", self.ml_config.get("model_name"))
+                    if model_name is None:
+                        model_name = self.model_manager.get_current_model()
+
                     backtest_params = {
                         "symbols": symbols,
-                        "lookback_period": 60,
+                        "model_name": model_name,
+                        "top_k": params.get("top_k", self.ml_config.get("top_k", 3)),
+                        "rebalance_period": params.get("rebalance_period", 1),
                         "sleeptime": "0S",
                         "timestep": "1H" if interval == "1h" else "1D",
                     }
-
-                    # Add ML-specific params if needed
-                    if strategy_type == "qlib_ml":
-                        backtest_params.update(
-                            {
-                                "model_name": params.get(
-                                    "model_name", self.ml_config.get("model_name")
-                                ),
-                                "top_k": params.get(
-                                    "top_k", self.ml_config.get("top_k", 3)
-                                ),
-                                "rebalance_period": params.get("rebalance_period", 1),
-                            }
-                        )
 
                     # If multiple symbols, use SPY as benchmark for better clarity
                     benchmark = (
@@ -470,27 +452,6 @@ class TradeManager:
 
     # ==================== ML 策略相关 API ====================
 
-    def set_strategy_type(self, strategy_type: str) -> dict:
-        """
-        设置策略类型
-
-        Args:
-            strategy_type: 'momentum' 或 'qlib_ml'
-
-
-        Returns:
-            操作结果
-        """
-        if strategy_type not in ["momentum", "qlib_ml"]:
-            return {"status": "error", "message": f"未知策略类型: {strategy_type}"}
-
-        if self.is_running:
-            return {"status": "error", "message": "策略运行中，请先停止"}
-
-        self.strategy_type = strategy_type
-        self.log(f"策略类型设置为: {strategy_type}")
-        return {"status": "success", "strategy_type": strategy_type}
-
     def set_ml_config(self, config: dict) -> dict:
         """
         设置 ML 策略配置
@@ -518,9 +479,8 @@ class TradeManager:
     def get_strategy_config(self) -> dict:
         """获取当前策略配置"""
         return {
-            "strategy_type": self.strategy_type,
+            "strategy_type": "qlib_ml",  # 固定使用 ML 策略
             "ml_config": self.ml_config.copy(),
-            "available_strategies": ["momentum", "qlib_ml"],
             "is_running": self.is_running,
             "status": self.state["status"],
         }
