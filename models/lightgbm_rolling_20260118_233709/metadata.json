@@ -1,7 +1,7 @@
 {
-  "train_samples": 3086,
+  "train_samples": 1170,
   "num_features": 57,
-  "best_iteration": 2,
+  "best_iteration": 11,
   "params": {
     "objective": "regression",
     "metric": "mse",
@@ -83,16 +83,14 @@
     "META",
     "TSLA"
   ],
-  "train_days": 504,
-  "valid_days": 63,
-  "target_horizon": 5,
-  "train_ic": 0.6089259804792175,
-  "valid_ic": -0.12811878103621524,
-  "ic": -0.12811878103621524,
-  "icir": -0.5628484215543021,
-  "mse": 0.0021036209933552744,
-  "model_name": "lightgbm",
-  "version": "20260118_031302",
-  "saved_at": "2026-01-18T03:13:02.573876",
+  "train_days": 252,
+  "interval": "1d",
+  "ic": 0.21327202583021823,
+  "icir": 0.8163054698305502,
+  "trained_via_ui": true,
+  "updated_at": "2026-01-18T23:37:09.617678",
+  "model_name": "lightgbm_rolling",
+  "version": "20260118_233709",
+  "saved_at": "2026-01-18T23:37:09.618583",
   "model_type": "LightGBMTrainer"
 }
