@@ -1,7 +1,7 @@
 """
-数据提供者模块 - 从 Alpaca 和 YFinance 获取美股历史数据
+数据提供者模块 - 从 Alpaca 获取美股历史数据
 
-任务 1.2 & 1.3: 实现 AlpacaDataProvider 和 YFinanceDataProvider
+使用 alpaca-py 作为唯一数据源
 """
 
 import os
@@ -10,7 +10,6 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 import pandas as pd
-import yfinance as yf
 from alpaca.data import StockHistoricalDataClient
 from alpaca.data.enums import DataFeed
 from alpaca.data.requests import StockBarsRequest
@@ -153,118 +152,22 @@ class AlpacaDataProvider(BaseDataProvider):
         return df
 
 
-class YFinanceDataProvider(BaseDataProvider):
-    """
-    YFinance 数据提供者 - 备用数据源
-
-    从 Yahoo Finance 获取美股历史 OHLCV 数据
-    """
-
-    def is_available(self) -> bool:
-        """YFinance 通常总是可用的"""
-        try:
-            ticker = yf.Ticker("SPY")
-            hist = ticker.history(period="5d")
-            return not hist.empty
-        except Exception as e:
-            logger.warning(f"YFinance 不可用: {e}")
-            return False
-
-    def fetch_data(
-        self,
-        symbols: list[str],
-        start_date: datetime,
-        end_date: datetime,
-        interval: str = "1d",
-    ) -> pd.DataFrame:
-        """
-        从 YFinance 获取历史数据
-
-        Returns:
-            DataFrame with columns: open, high, low, close, volume
-            MultiIndex: (datetime, symbol)
-        """
-        logger.info(f"从 YFinance 获取数据: {symbols}, {start_date} - {end_date}, interval={interval}")
-
-        all_data = []
-
-        for symbol in symbols:
-            try:
-                ticker = yf.Ticker(symbol)
-                
-                # YFinance interval format is '1d', '1h', etc.
-                hist = ticker.history(
-                    start=start_date.strftime("%Y-%m-%d"),
-                    end=end_date.strftime("%Y-%m-%d"),
-                    interval=interval,
-                )
-
-                if hist.empty:
-                    logger.warning(f"YFinance 返回空数据: {symbol}")
-                    continue
-
-                # 重命名列（YFinance 使用大写）
-                hist = hist.rename(
-                    columns={
-                        "Open": "open",
-                        "High": "high",
-                        "Low": "low",
-                        "Close": "close",
-                        "Volume": "volume",
-                    }
-                )
-
-                # 只保留需要的列
-                hist = hist[["open", "high", "low", "close", "volume"]]
-
-                # 添加 symbol 列
-                hist["symbol"] = symbol
-
-                # 重置索引
-                hist = hist.reset_index()
-                # YFinance 索引列名在不同 interval 下可能不同
-                timestamp_col = "Date" if "Date" in hist.columns else "Datetime"
-                hist = hist.rename(columns={timestamp_col: "timestamp"})
-                hist["timestamp"] = pd.to_datetime(hist["timestamp"]).dt.tz_localize(
-                    None
-                )
-
-                all_data.append(hist)
-
-            except Exception as e:
-                logger.error(f"获取 {symbol} 数据失败: {e}")
-
-        if not all_data:
-            return pd.DataFrame()
-
-        # 合并所有数据
-        df = pd.concat(all_data, ignore_index=True)
-        df = df.set_index(["timestamp", "symbol"])
-        df = df.sort_index()
-
-        logger.info(f"从 YFinance 获取了 {len(df)} 条记录")
-        return df
-
-
 class DataProviderFactory:
     """
-    数据提供者工厂 - 自动选择可用的数据源
+    数据提供者工厂 - 返回 AlpacaDataProvider
 
-    优先使用 Alpaca，降级到 YFinance
+    要求配置有效的 Alpaca API 密钥
     """
 
     @staticmethod
     def get_provider() -> BaseDataProvider:
-        """获取可用的数据提供者"""
+        """获取数据提供者（仅支持 Alpaca）"""
         alpaca = AlpacaDataProvider()
         if alpaca.is_available():
             logger.info("使用 Alpaca 作为数据源")
             return alpaca
 
-        logger.warning("Alpaca 不可用，降级到 YFinance")
-        yfinance = YFinanceDataProvider()
-        if yfinance.is_available():
-            logger.info("使用 YFinance 作为数据源")
-            return yfinance
+        raise RuntimeError(
+            "Alpaca 数据源不可用。请确保已设置 ALPACA_API_KEY 和 ALPACA_API_SECRET 环境变量。"
+        )
 
-        raise RuntimeError("没有可用的数据源")

@@ -11,7 +11,6 @@ dependencies = [
     "lumibot",                   # 交易机器人框架
     "alpaca-py>=0.43.2",         # Alpaca 交易所 API
     "ta-lib>=0.6.8",             # 技术分析指标库
-    "yfinance>=1.0",             # Yahoo Finance 数据获取
     # 机器学习框架
     "lightgbm",                  # LightGBM 梯度提升
     "catboost>=1.2.8",           # CatBoost 梯度提升
