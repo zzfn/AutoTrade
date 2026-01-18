@@ -42,55 +42,6 @@ TBD - created by archiving change add-qlib-ml-strategy. Update Purpose after arc
 
 ---
 
-### Requirement: 模型训练
-
-系统 SHALL 支持 ML 模型的离线训练和保存：
-
-- 支持 LightGBM 模型
-- 支持 walk-forward 验证
-- 模型保存包含元数据（版本、训练日期、参数、性能指标）
-- 模型存储于 `models/` 目录
-
-#### Scenario: 离线训练 LightGBM 模型
-
-- **WHEN** 用户运行模型训练脚本并指定配置
-- **THEN** 系统使用历史数据训练 LightGBM 模型
-- **AND** 模型保存到 `models/<model_name>/`
-- **AND** 生成 `metadata.json` 包含训练信息
-
-#### Scenario: Walk-forward 验证
-
-- **WHEN** 训练配置启用 walk-forward 验证
-- **THEN** 系统使用滚动窗口训练和验证
-- **AND** 输出每个窗口的性能指标
-
----
-
-### Requirement: Rolling 模型更新
-
-系统 SHALL 支持通过前端触发的模型 rolling 更新：
-
-- 前端提供 "Rolling Update" 按钮
-- 更新在后台异步执行
-- 更新完成后保存为新版本模型
-- 不自动切换使用中的模型
-
-#### Scenario: 触发 rolling 更新
-
-- **WHEN** 用户在前端点击 "Rolling Update" 按钮
-- **THEN** 系统启动后台模型更新任务
-- **AND** 前端显示更新进度
-- **AND** 更新完成后通知用户
-
-#### Scenario: 新模型版本创建
-
-- **WHEN** Rolling 更新完成
-- **THEN** 新模型保存为新版本（如 `lightgbm_v2`）
-- **AND** 原模型保持不变
-- **AND** 用户可手动切换到新模型
-
----
-
 ### Requirement: ML 策略执行
 
 系统 SHALL 提供 `QlibMLStrategy`，基于 ML 模型预测驱动交易决策：
@@ -160,4 +111,22 @@ TBD - created by archiving change add-qlib-ml-strategy. Update Purpose after arc
 - **WHEN** 用户选择 "Momentum Strategy"
 - **THEN** 系统使用原有的 `MomentumStrategy`
 - **AND** 不加载任何 ML 模型
+
+### Requirement: Unified Model Training
+
+The system SHALL provide a unified interface for training ML models, capable of handling both initial historical training and rolling updates with recent data.
+
+#### Scenario: User initiates training
+
+- **WHEN** user clicks "Train Model" in the UI
+- **AND** confirms configuration (symbols, parameters)
+- **THEN** system starts a background training task
+- **AND** saves the result as a new model version upon completion
+
+#### Scenario: Background execution
+
+- **WHEN** training is triggered
+- **THEN** the process runs asynchronously
+- **AND** UI displays progress similar to previous rolling update
+- **AND** user is notified upon success or failure
 
