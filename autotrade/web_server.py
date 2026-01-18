@@ -39,6 +39,14 @@ def _thread_safe_signal(signum, handler):
 
 signal.signal = _thread_safe_signal
 
+# Monkey patch Alpaca broker to avoid AttributeError: 'Alpaca' object has no attribute 'process_pending_orders'
+# this is a known issue in some version of lumibot during shutdown.
+from lumibot.brokers import Alpaca
+if not hasattr(Alpaca, "process_pending_orders"):
+    def _process_pending_orders_patch(self, *args, **kwargs):
+        pass
+    Alpaca.process_pending_orders = _process_pending_orders_patch
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -68,7 +76,13 @@ async def lifespan(app: FastAPI):
     # 应用关闭时的清理逻辑
     logger.info("正在执行策略生命周期关闭清理...")
     init_task.cancel()  # 如果还在初始化则取消
-    tm.stop_strategy()
+    try:
+        # 使用 to_thread 在同步代码执行期间不阻塞事件循环，并设置 5 秒超时
+        await asyncio.wait_for(asyncio.to_thread(tm.stop_strategy), timeout=5.0)
+    except asyncio.TimeoutError:
+        logger.warning("策略清理超时，强制关闭...")
+    except Exception as e:
+        logger.error(f"清理过程中发生错误: {e}")
 
 
 app = FastAPI(lifespan=lifespan)
@@ -97,12 +111,12 @@ tm = TradeManager()
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request, "index.html")
 
 
 @app.get("/backtest", response_class=HTMLResponse)
 async def read_backtest(request: Request):
-    return templates.TemplateResponse("backtest.html", {"request": request})
+    return templates.TemplateResponse(request, "backtest.html")
 
 
 @app.post("/api/run_backtest")
@@ -217,7 +231,7 @@ async def get_data_sync_status():
 @app.get("/models", response_class=HTMLResponse)
 async def models_page(request: Request):
     """模型管理页面"""
-    return templates.TemplateResponse("models.html", {"request": request})
+    return templates.TemplateResponse(request, "models.html")
 
 
 @app.websocket("/ws")

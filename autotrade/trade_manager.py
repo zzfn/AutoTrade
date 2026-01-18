@@ -432,6 +432,7 @@ class TradeManager:
                 # In newer LumiBot versions, we can stop the trader
                 # If not available, we at least mark it as not running
                 if hasattr(self.trader, "stop_all"):
+                    # This might block, but we call it from a thread or with timeout
                     self.trader.stop_all()
             except Exception as e:
                 self.log(f"Error stopping trader: {e}")
@@ -439,6 +440,7 @@ class TradeManager:
         # Force thread to end if possible and mark as stopped
         self.is_running = False
         self.update_status("stopped")
+        self.log("Strategy stopped manually.")
         return {"status": "success", "message": "策略已停止"}
 
     def update_status(self, status: str):
