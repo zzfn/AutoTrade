@@ -1,6 +1,6 @@
 {% extends "layout.html" %} {% block content %}
 <div id="dashboard-root"></div>
-{% endblock %} {% block scripts %}
+{% endblock %} {% block scripts %} {% raw %}
 <script type="text/babel">
   const Dashboard = () => {
     const { data, status: connectionStatus } = useWebSocket(
@@ -37,13 +37,23 @@
             <div className="flex justify-between items-center p-3 bg-slate-800/30 rounded-lg border border-slate-700/30 mt-2">
               <span className="text-slate-400 text-sm">市场状态</span>
               <span
-                className={`text-xs font-bold px-2 py-1 rounded border ${data.market_status === "open" ? "bg-green-500/10 text-green-400 border-green-500/20" : "bg-slate-500/10 text-slate-400 border-slate-500/20"}`}
+                className={`text-xs font-bold px-2 py-1 rounded border ${
+                  data.market_status === "open"
+                    ? "bg-green-500/10 text-green-400 border-green-500/20"
+                    : ["pre_market", "after_hours"].includes(data.market_status)
+                      ? "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                      : "bg-slate-500/10 text-slate-400 border-slate-500/20"
+                }`}
               >
-                {data.market_status
-                  ? data.market_status === "open"
-                    ? "开盘中"
-                    : "已休市"
-                  : "未知"}
+                {data.market_status === "open"
+                  ? "开盘中"
+                  : data.market_status === "pre_market"
+                    ? "盘前交易"
+                    : data.market_status === "after_hours"
+                      ? "盘后交易"
+                      : data.market_status === "closed"
+                        ? "已休市"
+                        : "未知"}
               </span>
             </div>
             <div className="flex justify-between items-center text-xs text-slate-500 px-1 mt-2">
@@ -94,6 +104,93 @@
               </div>
             </div>
           </div>
+        </Card>
+
+        {/* ML Prediction Signals */}
+        <Card title="实时预测信号" className="col-span-1 md:col-span-3">
+          {!data.signals || data.signals.length === 0 ? (
+            <div className="text-slate-500 text-center py-8 italic border border-dashed border-slate-700/50 rounded-xl bg-slate-800/20">
+              <div className="mb-2">暂无预测信号</div>
+              <div className="text-xs text-slate-600">
+                {data.model_loaded ? "等待下一个交易迭代..." : "ML 模型未加载"}
+              </div>
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-lg border border-slate-700/30">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="text-slate-400 text-sm bg-slate-800/50 border-b border-slate-700/30">
+                    <th className="p-4 font-medium">排名</th>
+                    <th className="p-4 font-medium">代码</th>
+                    <th className="p-4 font-medium">预测分数</th>
+                    <th className="p-4 font-medium">信号强度</th>
+                    <th className="p-4 font-medium">状态</th>
+                  </tr>
+                </thead>
+                <tbody className="text-slate-300 text-sm">
+                  {data.signals.map((signal, i) => {
+                    const score = signal.score;
+                    const absScore = Math.abs(score);
+                    const maxAbsScore = Math.max(
+                      ...data.signals.map((s) => Math.abs(s.score)),
+                      0.001,
+                    );
+                    const barWidth = Math.min(
+                      (absScore / maxAbsScore) * 100,
+                      100,
+                    );
+                    const isPositive = score >= 0;
+
+                    return (
+                      <tr
+                        key={i}
+                        className={`border-b border-slate-800/30 hover:bg-slate-700/20 transition-colors last:border-0 ${signal.is_top_k ? "bg-cyan-900/10" : ""}`}
+                      >
+                        <td className="p-4">
+                          <span
+                            className={`inline-flex items-center justify-center w-8 h-8 rounded-full text-sm font-bold ${signal.is_top_k ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/30" : "bg-slate-700/30 text-slate-400"}`}
+                          >
+                            {signal.rank}
+                          </span>
+                        </td>
+                        <td
+                          className={`p-4 font-bold ${signal.is_top_k ? "text-cyan-300" : "text-slate-300"}`}
+                        >
+                          {signal.symbol}
+                          {signal.is_top_k && (
+                            <span className="ml-2 text-[10px] bg-cyan-500/20 text-cyan-400 px-1.5 py-0.5 rounded font-normal border border-cyan-500/30">
+                              TOP-K
+                            </span>
+                          )}
+                        </td>
+                        <td
+                          className={`p-4 font-mono ${isPositive ? "text-emerald-400" : "text-rose-400"}`}
+                        >
+                          {isPositive ? "+" : ""}
+                          {score.toFixed(6)}
+                        </td>
+                        <td className="p-4">
+                          <div className="w-full bg-slate-700/30 rounded-full h-2 overflow-hidden">
+                            <div
+                              className={`h-full rounded-full transition-all duration-300 ${isPositive ? "bg-gradient-to-r from-emerald-500/50 to-emerald-400" : "bg-gradient-to-r from-rose-500/50 to-rose-400"}`}
+                              style={{ width: `${barWidth}%` }}
+                            />
+                          </div>
+                        </td>
+                        <td className="p-4">
+                          <span
+                            className={`px-2 py-0.5 rounded text-xs font-medium uppercase ${isPositive ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" : "bg-rose-500/10 text-rose-400 border border-rose-500/20"}`}
+                          >
+                            {isPositive ? "看多" : "看空"}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </Card>
         {console.log(data)}
         {/* Positions */}
@@ -256,4 +353,4 @@
   const root = ReactDOM.createRoot(document.getElementById("dashboard-root"));
   root.render(<Dashboard />);
 </script>
-{% endblock %}
+{% endraw %} {% endblock %}

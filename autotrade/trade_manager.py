@@ -41,7 +41,13 @@ class TradeManager:
             "portfolio": {"cash": 0.0, "value": 0.0, "positions": []},
             "market_status": "unknown",
             "last_update": None,
+            "signals": [],  # 实时预测信号
         }
+        
+        # 市场状态检查缓存
+        self._market_clock_cache = None  # 存储 Alpaca Clock 对象
+        self._next_api_check_time = 0
+
 
         # ML 策略配置
         self.ml_config: dict[str, Any] = {
@@ -395,14 +401,165 @@ class TradeManager:
 
                             # 4. Update overall status
                             try:
-                                dt = self.active_strategy.get_datetime()
-                                market_status = (
-                                    "open"
-                                    if dt and dt.weekday() < 5
-                                    else "closed"
-                                )
-                            except:
+                                import time
+                                import pytz
+                                from datetime import datetime, timedelta
+
+                                now_ts = time.time()
+                                should_update_api = False
+                                
+                                # 检查是否需要更新 API 数据
+                                if self._market_clock_cache is None or now_ts >= self._next_api_check_time:
+                                    should_update_api = True
+
+                                if should_update_api:
+                                    if hasattr(self.active_strategy.broker, "api"):
+                                        try:
+                                            # 调用 API
+                                            clock = self.active_strategy.broker.api.get_clock()
+                                            self._market_clock_cache = clock
+                                            
+                                            # 计算下次更新时间 (智能缓存)
+                                            # 默认至少 1 分钟后才更新，防止 API 滥用
+                                            next_check = now_ts + 60
+                                            
+                                            current_time = clock.timestamp
+                                            
+                                            if clock.is_open:
+                                                # 如果开盘中，下次关键时间是收盘
+                                                time_to_close = (clock.next_close - current_time).total_seconds()
+                                                # 设置为收盘前一点，或最长 15 分钟缓存
+                                                wait_seconds = min(time_to_close + 5, 15 * 60)
+                                                next_check = max(next_check, now_ts + wait_seconds)
+                                            else:
+                                                # 如果未开盘，下次关键时间是开盘
+                                                time_to_open = (clock.next_open - current_time).total_seconds()
+                                                
+                                                # 但我们要考虑盘前 (04:00) 和 盘后结束 (20:00)
+                                                # 这些时间点 Alpaca Clock 不直接给，需要自己算距离
+                                                ny_tz = pytz.timezone('America/New_York')
+                                                now_ny = datetime.now(ny_tz)
+                                                
+                                                # 关键时间点列表 (今天和明天的 04:00, 20:00)
+                                                check_points = []
+                                                for day_offset in [0, 1]:
+                                                    date_ref = now_ny.date() + timedelta(days=day_offset)
+                                                    check_points.append(ny_tz.localize(datetime.combine(date_ref, datetime.min.time()) + timedelta(hours=4)))  # 04:00
+                                                    check_points.append(ny_tz.localize(datetime.combine(date_ref, datetime.min.time()) + timedelta(hours=20))) # 20:00
+                                                
+                                                # 找到最近的一个还未到的时间点
+                                                next_point_wait = 15 * 60 # 默认 15 min
+                                                for point in check_points:
+                                                    wait = (point - now_ny).total_seconds()
+                                                    if wait > 0:
+                                                        next_point_wait = wait
+                                                        break
+                                                
+                                                # 取 min(距离开盘, 距离盘前/盘后切换点, 15分钟)
+                                                wait_seconds = min(time_to_open + 5, next_point_wait + 5, 15 * 60)
+                                                next_check = max(next_check, now_ts + wait_seconds)
+
+                                            self._next_api_check_time = next_check
+                                            # self.log(f"Debug: Market Clock updated. Next check in {(self._next_api_check_time - now_ts):.0f}s")
+                                            
+                                        except Exception as e:
+                                            # self.log(f"Debug: API call failed: {e}")
+                                            # 出错后 1 分钟重试
+                                            self._next_api_check_time = now_ts + 60
+                                    else:
+                                        # Fallback logic if no API
+                                        self._market_clock_cache = None
+                                        self._next_api_check_time = now_ts + 60
+
+                                # ----------------------------------------------------
+                                # 基于缓存的 Clock 数据计算当前状态
+                                # ----------------------------------------------------
                                 market_status = "unknown"
+                                
+                                if self._market_clock_cache:
+                                    clock = self._market_clock_cache
+                                    if clock.is_open:
+                                        market_status = "open"
+                                    else:
+                                        # 计算详细状态 (pre_market, after_hours, closed)
+                                        # 使用本地当前时间 (因为 API timestamp 是快照)
+                                        ny_tz = pytz.timezone('America/New_York')
+                                        now_ny = datetime.now(ny_tz)
+                                        
+                                        # 周末判断
+                                        if now_ny.weekday() >= 5:
+                                            market_status = "closed"
+                                        else:
+                                            current_hour = now_ny.hour
+                                            current_minute = now_ny.minute
+                                            t_val = current_hour * 100 + current_minute
+                                            
+                                            # 04:00 - 09:30 Pre-Market
+                                            # 09:30 - 16:00 Market (Should be handled by is_open, but simple fallback)
+                                            # 16:00 - 20:00 After-Hours
+                                            
+                                            if 400 <= t_val < 930:
+                                                # 只有当今天(或next_open那一天)是交易日才算 Pre-Market
+                                                # Check if next_open is today
+                                                if clock.next_open.astimezone(ny_tz).date() == now_ny.date():
+                                                    market_status = "pre_market"
+                                                else:
+                                                    market_status = "closed" # Holiday morning
+                                            elif 1600 <= t_val < 2000:
+                                                market_status = "after_hours"
+                                            else:
+                                                market_status = "closed"
+                                                
+                                elif not hasattr(self.active_strategy.broker, "api"):
+                                    # Fallback simple logic
+                                    try:
+                                        dt = self.active_strategy.get_datetime()
+                                        if dt and dt.weekday() < 5 and 9 <= dt.hour < 16:
+                                            market_status = "open"
+                                        else:
+                                            market_status = "closed"
+                                    except:
+                                        market_status = "unknown"
+                                else:
+                                    # API available but cache fetch failed specific status usually kept from previous
+                                    pass
+
+                            except Exception as e:
+                                # self.log(f"Debug: Error checking market status: {e}")
+                                # import traceback
+                                # traceback.print_exc()
+                                pass
+
+                            # 5. Get prediction signals from strategy
+                            signals_data = []
+                            try:
+                                if hasattr(self.active_strategy, "get_prediction_summary"):
+                                    summary = self.active_strategy.get_prediction_summary()
+                                    predictions = summary.get("predictions", {})
+                                    top_k = summary.get("top_k", 3)
+                                    model_loaded = summary.get("model_loaded", False)
+                                    
+                                    # Convert predictions to sorted list
+                                    if predictions:
+                                        sorted_preds = sorted(
+                                            predictions.items(),
+                                            key=lambda x: x[1],
+                                            reverse=True
+                                        )
+                                        for rank, (symbol, score) in enumerate(sorted_preds, 1):
+                                            signals_data.append({
+                                                "symbol": symbol,
+                                                "score": float(score),
+                                                "rank": rank,
+                                                "is_top_k": rank <= top_k,
+                                            })
+                                    
+                                    self.state["model_loaded"] = model_loaded
+                            except Exception as e:
+                                # self.log(f"Debug: Error getting signals: {e}")
+                                pass
+                            
+                            self.state["signals"] = signals_data
 
                             self.update_portfolio(
                                 cash, value, positions_data, market_status=market_status

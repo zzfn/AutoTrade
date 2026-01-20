@@ -252,6 +252,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     },
                     "market_status": tm.state.get("market_status", "unknown"),
                     "last_update": tm.state.get("last_update"),
+                    "signals": [dict(s) for s in tm.state.get("signals", [])],
+                    "model_loaded": tm.state.get("model_loaded", False),
                     "strategy_config": tm.get_strategy_config(),
                     "training_status": tm.get_training_status().copy() if isinstance(tm.get_training_status(), dict) else tm.get_training_status(),
                     "data_sync_status": tm.get_data_sync_status().copy() if isinstance(tm.get_data_sync_status(), dict) else tm.get_data_sync_status()
