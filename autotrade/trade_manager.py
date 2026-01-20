@@ -367,37 +367,81 @@ class TradeManager:
                             except Exception as e:
                                 self.log(f"Debug: Error updating positions: {e}")
 
+
                             # 3. Sync orders
                             try:
-                                lumi_orders = self.active_strategy.get_orders()
-                                current_order_ids = [o["id"] for o in self.state["orders"]]
+                                # Use get_all_orders from broker if available to get historical orders too
+                                if hasattr(self.active_strategy.broker, "get_all_orders"):
+                                    lumi_orders = self.active_strategy.broker.get_all_orders()
+                                else:
+                                    lumi_orders = self.active_strategy.get_orders()
 
+                                new_orders_list = []
+                                current_orders_map = {o["id"]: o for o in self.state["orders"]}
+                                
                                 for o in lumi_orders:
                                     order_id = str(o.identifier)
-                                    if order_id not in current_order_ids:
-                                        order_info = {
-                                            "id": order_id,
-                                            "symbol": o.asset.symbol,
-                                            "action": str(o.side).upper(),
-                                            "quantity": float(o.quantity),
-                                            "price": float(o.price) if o.price else 0.0,
-                                            "status": str(o.status),
-                                            "timestamp": self.active_strategy.get_datetime().isoformat(),
-                                        }
-                                        self.add_order(order_info)
-                                        self.log(
-                                            f"New Order: {order_info['action']} {order_info['quantity']} {order_info['symbol']} @ {order_info['price']}"
-                                        )
-                                    else:
-                                        # Update status of existing orders if they changed
-                                        for existing in self.state["orders"]:
-                                            if existing["id"] == order_id and existing[
-                                                "status"
-                                            ] != str(o.status):
-                                                existing["status"] = str(o.status)
-                                                self.log(
-                                                    f"Order Update: {order_id} is now {str(o.status)}"
-                                                )
+                                    
+
+                                    # Try to define timestamp
+                                    ts_str = None
+                                    # Check common timestamp attributes
+                                    for attr in ["created_at", "submitted_at", "timestamp"]:
+                                        val = getattr(o, attr, None)
+                                        if val:
+                                            if hasattr(val, "isoformat"):
+                                                ts_str = val.isoformat()
+                                            else:
+                                                ts_str = str(val)
+                                            break
+                                            
+                                    # If no timestamp found, try to use existing one from state
+                                    if not ts_str and order_id in current_orders_map:
+                                        ts_str = current_orders_map[order_id]["timestamp"]
+                                        
+                                    # Fallback to current time (mostly for new orders where we can't find ts)
+                                    if not ts_str:
+                                        ts_str = self.active_strategy.get_datetime().isoformat()
+
+                                    # Price logic
+                                    price = 0.0
+                                    if hasattr(o, "price") and o.price:
+                                        price = float(o.price)
+                                    elif hasattr(o, "avg_fill_price") and o.avg_fill_price:
+                                        price = float(o.avg_fill_price)
+
+                                    order_info = {
+                                        "id": order_id,
+                                        "symbol": o.asset.symbol,
+                                        "action": str(o.side).upper(),
+                                        "quantity": float(o.quantity),
+                                        "price": price,
+                                        "status": str(o.status),
+                                        "timestamp": ts_str,
+                                    }
+                                    new_orders_list.append(order_info)
+
+                                # Sort desc by timestamp
+                                try:
+                                    new_orders_list.sort(key=lambda x: x["timestamp"], reverse=True)
+                                except:
+                                    pass
+
+                                # Update state with top 50
+                                self.state["orders"] = new_orders_list[:50]
+                                
+                                # Log new orders (compare with previous state to avoid spam)
+                                # This simple comparison might miss some if we just replaced everything, 
+                                # but for logging purposes we can check if the top order changed or similar.
+                                # Or just log "synced X orders".
+                                # To preserve "New Order" logs, we could check if ID was unknown before.
+                                
+                                for no in new_orders_list[:5]: # Check top 5
+                                    if no["id"] not in current_orders_map:
+                                        self.log(f"New Order Found: {no['action']} {no['quantity']} {no['symbol']} @ {no['price']}")
+                                    elif current_orders_map[no["id"]]["status"] != no["status"]:
+                                        self.log(f"Order Update: {no['id']} is now {no['status']}")
+
                             except Exception as e:
                                 # self.log(f"Debug: Error updating orders: {e}")
                                 pass
