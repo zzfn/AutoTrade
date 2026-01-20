@@ -9,8 +9,8 @@ from lumibot.backtesting import YahooDataBacktesting
 from lumibot.brokers import Alpaca
 from lumibot.traders import Trader
 
-from autotrade.execution.strategies import QlibMLStrategy
-from autotrade.research.models import ModelManager
+from autotrade.strategies import QlibMLStrategy
+from autotrade.ml import ModelManager
 
 
 class TradeManager:
@@ -727,8 +727,7 @@ class TradeManager:
         def _training_task():
             try:
                 from autotrade.research.data import QlibDataAdapter
-                from autotrade.research.features import QlibFeatureGenerator
-                from autotrade.research.models import LightGBMTrainer
+                from autotrade.ml import QlibFeatureGenerator, LightGBMTrainer
                 from datetime import timedelta
 
                 self.training_status["in_progress"] = True

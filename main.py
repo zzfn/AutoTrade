@@ -16,7 +16,7 @@ def main():
     if args.command == "run":
         print("Starting AutoTrade Web Server (FastAPI + React)...")
         # Using reload=True for dev experience as requested
-        uvicorn.run("autotrade.web_server:app", host="0.0.0.0", port=8000, reload=True)
+        uvicorn.run("autotrade.web.server:app", host="0.0.0.0", port=8000, reload=True)
     else:
         print(f"Unknown command: {args.command}")
         print("Available commands: run")
