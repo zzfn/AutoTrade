@@ -804,7 +804,7 @@ class TradeManager:
                 y_train, y_valid = target.iloc[:split_idx], target.iloc[split_idx:]
 
                 trainer = LightGBMTrainer(
-                    model_name="lightgbm_rolling",
+                    model_name="deepalaph",
                     num_boost_round=300,
                 )
                 trainer.train(X_train, y_train, X_valid, y_valid)
