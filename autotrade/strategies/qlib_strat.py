@@ -4,14 +4,9 @@ Qlib ML Strategy - Machine learning driven trading strategy.
 This strategy uses Qlib-trained ML models to predict returns and make trading decisions.
 It has been refactored to use the new `ml` and `data` modules for cleaner architecture.
 """
-
-from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Optional
 
-import numpy as np
 import pandas as pd
-from loguru import logger
 from lumibot.strategies.strategy import Strategy
 
 # Import from new module locations
@@ -268,15 +263,31 @@ class QlibMLStrategy(Strategy):
         """
         predictions = {}
 
-        for symbol in self.symbols:
-            try:
-                # Fetch historical data
-                history = self.get_historical_prices(
-                    symbol, self.lookback_period, self.interval
-                )
+        # Batch fetch historical data for all symbols
+        # This is significantly faster than fetching one by one
+        try:
+            histories = self.get_historical_prices(
+                self.symbols, self.lookback_period, self.interval
+            )
+        except Exception as e:
+            self.log_message(f"Failed to fetch batch history: {e}")
+            return predictions
 
-                if history is None or history.df.empty:
-                    self.log_message(f"Unable to fetch history for {symbol}")
+        if not histories:
+            self.log_message("No historical data returned")
+            return predictions
+
+        # Process each symbol
+        # histories is expected to be a dict {symbol: Bars/DataFrame}
+        for symbol, history in histories.items():
+            try:
+                if history is None:
+                    continue
+                
+                # Check for empty data
+                if hasattr(history, 'df') and history.df.empty:
+                    continue
+                if isinstance(history, pd.DataFrame) and history.empty:
                     continue
 
                 # Use adapter to standardize data format
