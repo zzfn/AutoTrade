@@ -101,20 +101,23 @@ class TradeManager:
 
             # 3. Load symbols from config
             base_dir = os.path.dirname(os.path.abspath(__file__))
-            config_path = os.path.join(base_dir, "../configs/universe.yaml")
-            symbols = ["SPY"]  # Default
+            config_path = os.path.join(base_dir, "../configs/qlib_ml_config.yaml")
+            symbols = ["SPY", "QQQ", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA"]  # Default
 
             try:
                 if os.path.exists(config_path):
                     with open(config_path, "r") as f:
                         config = yaml.safe_load(f)
-                        if config and "symbols" in config:
-                            symbols = config["symbols"]
-                            self.log(f"Loaded symbols from config: {symbols}")
-                        else:
-                            self.log(
-                                "Config file found but no 'symbols' key. Using default."
-                            )
+                        # 支持新的嵌套结构
+                        if config:
+                            if "data" in config and "symbols" in config["data"]:
+                                symbols = config["data"]["symbols"]
+                                self.log(f"Loaded symbols from config (merged): {symbols}")
+                            elif "symbols" in config:
+                                symbols = config["symbols"]
+                                self.log(f"Loaded symbols from config (legacy): {symbols}")
+                            else:
+                                self.log("Config loaded but no symbols found. Using default.")
                 else:
                     self.log(
                         f"Config file not found at {config_path}. Using default symbols."

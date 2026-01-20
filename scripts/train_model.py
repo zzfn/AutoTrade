@@ -231,8 +231,53 @@ def main():
     # 如果提供了配置文件，加载并覆盖参数
     if args.config:
         config = load_config(args.config)
+        
+        # 处理嵌套配置映射
+        # 1. data
+        if "data" in config:
+            data_conf = config["data"]
+            if "symbols" in data_conf:
+                args.symbols = ",".join(data_conf["symbols"])
+            if "data_dir" in data_conf:
+                args.data_dir = data_conf["data_dir"]
+            if "train_days" in data_conf:
+                args.train_days = data_conf["train_days"]
+            if "valid_days" in data_conf:
+                args.valid_days = data_conf["valid_days"]
+                
+        # 2. model
+        if "model" in config:
+            model_conf = config["model"]
+            if "name" in model_conf:
+                args.model_name = model_conf["name"]
+            if "params" in model_conf:
+                # 注意：params 目前在 argparse 里没有直接对应的字典参数，
+                # 这里主要处理一些顶层暴露的参数
+                params = model_conf["params"]
+                if "learning_rate" in params:
+                    args.learning_rate = params["learning_rate"]
+                if "num_boost_round" in model_conf: # 注意这里是在 model 层级还是 params 层级
+                    # qlib_ml_config 示例中 num_boost_round 在 model 层级
+                   args.num_boost_round = model_conf.get("num_boost_round", args.num_boost_round)
+            
+            # 检查直接在 model 下的参数
+            if "num_boost_round" in model_conf:
+                args.num_boost_round = model_conf["num_boost_round"]
+                
+            if "target_horizon" in model_conf:
+                 args.target_horizon = model_conf["target_horizon"]
+
+        # 3. validation
+        if "validation" in config:
+             val_conf = config["validation"]
+             # walk_forward 是个开关
+             # 如果 config 里明确配置了 validation.enabled，则覆盖
+             if "enabled" in val_conf and val_conf["enabled"]:
+                 args.walk_forward = True
+
+        # 保留原有的扁平映射作为 fallback
         for key, value in config.items():
-            if hasattr(args, key.replace("-", "_")):
+            if hasattr(args, key.replace("-", "_")) and not isinstance(value, dict):
                 setattr(args, key.replace("-", "_"), value)
 
     # 解析参数

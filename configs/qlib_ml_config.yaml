@@ -5,6 +5,7 @@ data:
   # 股票池
   symbols:
     - SPY
+    - QQQ
     - AAPL
     - MSFT
     - GOOGL
@@ -12,8 +13,7 @@ data:
     - META
     - NVDA
     - TSLA
-    - JPM
-    - V
+    - BTC/USD
 
   # 数据源优先级: alpaca > yfinance
   data_dir: data/qlib
