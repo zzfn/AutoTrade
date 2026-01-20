@@ -44,6 +44,9 @@ class TradeManager:
             "signals": [],  # 实时预测信号
         }
         
+        # Track known orders to prevent duplicate logs
+        self._known_order_ids = set()
+        
         # 市场状态检查缓存
         self._market_clock_cache = None  # 存储 Alpaca Clock 对象
         self._next_api_check_time = 0
@@ -383,17 +386,58 @@ class TradeManager:
                                     order_id = str(o.identifier)
                                     
 
-                                    # Try to define timestamp
+                                    # --- Timestamp Extraction Logic ---
                                     ts_str = None
-                                    # Check common timestamp attributes
-                                    for attr in ["created_at", "submitted_at", "timestamp"]:
-                                        val = getattr(o, attr, None)
-                                        if val:
-                                            if hasattr(val, "isoformat"):
+                                    raw_data = getattr(o, "_raw", {})
+                                    if not isinstance(raw_data, dict):
+                                        raw_data = {}
+
+                                    # 1. Try to get filled time from raw data (most accurate for filled orders)
+                                    val = raw_data.get("filled_at")
+                                    
+                                    # 2. If no fill time, try other raw timestamps
+                                    if not val:
+                                        val = raw_data.get("submitted_at") or raw_data.get("created_at")
+
+                                    # 3. If still nothing, check object attributes
+                                    if not val:
+                                        # List of attributes to check, in order of preference
+                                        candidates = [
+                                            "filled_at", 
+                                            "submitted_at", 
+                                            "created_at", 
+                                            "timestamp", 
+                                            "broker_create_date", 
+                                            "_date_created"
+                                        ]
+                                        for attr in candidates:
+                                            v = getattr(o, attr, None)
+                                            if v:
+                                                val = v
+                                                break
+                                    
+                                    # Format validation & Timezone adjustment
+                                    if val:
+                                        try:
+                                            # Convert to timezone aware if not already
+                                            if isinstance(val, str):
+                                                # Try basic parsing if it's a string
+                                                from datetime import datetime
+                                                try:
+                                                    val = datetime.fromisoformat(val)
+                                                except:
+                                                    pass
+
+                                            if hasattr(val, "astimezone"):
+                                                # Convert to local system time
+                                                local_val = val.astimezone()
+                                                ts_str = local_val.isoformat()
+                                            elif hasattr(val, "isoformat"):
                                                 ts_str = val.isoformat()
                                             else:
                                                 ts_str = str(val)
-                                            break
+                                        except Exception:
+                                            ts_str = str(val)
                                             
                                     # If no timestamp found, try to use existing one from state
                                     if not ts_str and order_id in current_orders_map:
@@ -401,14 +445,62 @@ class TradeManager:
                                         
                                     # Fallback to current time (mostly for new orders where we can't find ts)
                                     if not ts_str:
-                                        ts_str = self.active_strategy.get_datetime().isoformat()
+                                        ts_str = self.active_strategy.get_datetime().astimezone().isoformat()
 
-                                    # Price logic
+                                    # Price logic - Prioritize Average Filled Price
                                     price = 0.0
-                                    if hasattr(o, "price") and o.price:
-                                        price = float(o.price)
-                                    elif hasattr(o, "avg_fill_price") and o.avg_fill_price:
-                                        price = float(o.avg_fill_price)
+                                    
+                                    # 1. From raw data (filled_avg_price)
+                                    raw_price = raw_data.get("filled_avg_price")
+                                    if raw_price:
+                                        try:
+                                            price = float(raw_price)
+                                        except:
+                                            pass
+                                            
+                                    # 2. From object attributes
+                                    if price == 0.0:
+                                        if hasattr(o, "avg_fill_price") and o.avg_fill_price:
+                                            price = float(o.avg_fill_price)
+                                        elif hasattr(o, "filled_avg_price") and o.filled_avg_price:
+                                            price = float(o.filled_avg_price)
+                                        elif hasattr(o, "average_price") and o.average_price:  # older lumibot
+                                            price = float(o.average_price)
+                                        elif hasattr(o, "price") and o.price:
+                                            price = float(o.price)
+
+                                    # Intent logic
+                                    intent = "unknown"
+                                    
+                                    # Debug extraction steps
+                                    raw_intent = raw_data.get("position_intent")
+                                    # self.log(f"DEBUG: Order {order_id} raw_intent type: {type(raw_intent)} val: {raw_intent}")
+                                    
+                                    if raw_intent is not None:
+                                        # Handle Enum objects (common in Alpaca SDK)
+                                        if hasattr(raw_intent, "value"):
+                                            intent = str(raw_intent.value)
+                                        else:
+                                            intent = str(raw_intent)
+                                            
+                                    # Fallback to object attribute
+                                    if intent == "unknown" and hasattr(o, "position_intent"):
+                                        obj_intent = o.position_intent
+                                        if obj_intent:
+                                            if hasattr(obj_intent, "value"):
+                                                intent = str(obj_intent.value)
+                                            else:
+                                                intent = str(obj_intent)
+
+                                    # Clean up intent string
+                                    if "." in intent:
+                                        intent = intent.split(".")[-1]
+                                    
+                                    intent = intent.lower()
+                                    
+                                    # Final Check Log
+                                    # if intent == "unknown" and raw_intent is not None:
+                                    #     self.log(f"DEBUG: Failed to extract intent from {raw_intent}")
 
                                     order_info = {
                                         "id": order_id,
@@ -418,8 +510,34 @@ class TradeManager:
                                         "price": price,
                                         "status": str(o.status),
                                         "timestamp": ts_str,
+                                        "intent": intent,
                                     }
                                     new_orders_list.append(order_info)
+
+                                    # Check for new orders to log
+                                    if order_id not in self._known_order_ids:
+                                        # Only log if it's not the initial massive sync (e.g. < 10 new orders at once)
+                                        # OR if we want to see everything, just log. 
+                                        # To avoid spamming on startup, we could check a flag, but simple check:
+                                        # If timestamp is recent (e.g. last 5 mins), log it.
+                                        is_recent = False
+                                        try:
+                                            # timestamp formatting ISO usually: '2023-01-01T10:00:00'
+                                            if ts_str:
+                                                # Simple parsing attempt
+                                                odt = datetime.fromisoformat(ts_str)
+                                                # Check if within last 5 minutes
+                                                if (datetime.now() - odt).total_seconds() < 300:
+                                                    is_recent = True
+                                        except:
+                                            # If parsing fails, and it wasn't known, maybe it is new? 
+                                            # But if timestamp failed, ts_str might be "now", so is_recent=True
+                                            is_recent = True
+                                        
+                                        if is_recent:
+                                            self.log(f"New Order Found: {order_info['action']} {order_info['quantity']} {order_info['symbol']} @ {order_info['price']}")
+                                        
+                                        self._known_order_ids.add(order_id)
 
                                 # Sort desc by timestamp
                                 try:
@@ -429,18 +547,6 @@ class TradeManager:
 
                                 # Update state with top 50
                                 self.state["orders"] = new_orders_list[:50]
-                                
-                                # Log new orders (compare with previous state to avoid spam)
-                                # This simple comparison might miss some if we just replaced everything, 
-                                # but for logging purposes we can check if the top order changed or similar.
-                                # Or just log "synced X orders".
-                                # To preserve "New Order" logs, we could check if ID was unknown before.
-                                
-                                for no in new_orders_list[:5]: # Check top 5
-                                    if no["id"] not in current_orders_map:
-                                        self.log(f"New Order Found: {no['action']} {no['quantity']} {no['symbol']} @ {no['price']}")
-                                    elif current_orders_map[no["id"]]["status"] != no["status"]:
-                                        self.log(f"Order Update: {no['id']} is now {no['status']}")
 
                             except Exception as e:
                                 # self.log(f"Debug: Error updating orders: {e}")
