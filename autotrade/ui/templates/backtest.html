@@ -11,7 +11,6 @@
       symbol: "AAPL,MSFT,GOOGL,AMZN,NVDA,META,TSLA",
       model_name: "",
       top_k: 3,
-      rebalance_period: 1,
     });
     const [models, setModels] = useState([]);
     const [loading, setLoading] = useState(false);
@@ -52,60 +51,44 @@
         <Card title="回测配置" className="col-span-1 h-fit">
           <div className="space-y-4">
             <div className="p-4 bg-purple-500/5 rounded-xl border border-purple-500/20 space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-purple-300 mb-1.5">
+                  模型选择
+                </label>
+                <select
+                  className="w-full bg-slate-900/50 border border-slate-700/50 rounded-lg p-2 text-slate-200 text-sm focus:border-purple-500/50 outline-none"
+                  value={params.model_name}
+                  onChange={(e) =>
+                    setParams({ ...params, model_name: e.target.value })
+                  }
+                >
+                  <option value="">使用当前最优模型</option>
+                  {models.map((m) => (
+                    <option key={m.name} value={m.name}>
+                      {m.name} (IC: {(m.metrics?.ic || 0).toFixed(3)})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-3 text-sm">
                 <div>
-                  <label className="block text-xs font-medium text-purple-300 mb-1.5">
-                    模型选择
+                  <label className="block text-xs text-slate-500 mb-1">
+                    Top-K
                   </label>
-                  <select
-                    className="w-full bg-slate-900/50 border border-slate-700/50 rounded-lg p-2 text-slate-200 text-sm focus:border-purple-500/50 outline-none"
-                    value={params.model_name}
+                  <input
+                    type="number"
+                    className="w-full bg-slate-900/50 border border-slate-700/50 rounded-lg p-2 text-slate-200"
+                    value={params.top_k}
                     onChange={(e) =>
-                      setParams({ ...params, model_name: e.target.value })
+                      setParams({
+                        ...params,
+                        top_k: parseInt(e.target.value),
+                      })
                     }
-                  >
-                    <option value="">使用当前最优模型</option>
-                    {models.map((m) => (
-                      <option key={m.name} value={m.name}>
-                        {m.name} (IC: {(m.metrics?.ic || 0).toFixed(3)})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  <div>
-                    <label className="block text-xs text-slate-500 mb-1">
-                      Top-K
-                    </label>
-                    <input
-                      type="number"
-                      className="w-full bg-slate-900/50 border border-slate-700/50 rounded-lg p-2 text-slate-200"
-                      value={params.top_k}
-                      onChange={(e) =>
-                        setParams({
-                          ...params,
-                          top_k: parseInt(e.target.value),
-                        })
-                      }
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-500 mb-1">
-                      权重周期
-                    </label>
-                    <input
-                      type="number"
-                      className="w-full bg-slate-900/50 border border-slate-700/50 rounded-lg p-2 text-slate-200"
-                      value={params.rebalance_period}
-                      onChange={(e) =>
-                        setParams({
-                          ...params,
-                          rebalance_period: parseInt(e.target.value),
-                        })
-                      }
-                    />
-                  </div>
+                  />
                 </div>
               </div>
+            </div>
 
             <div>
               <label className="block text-sm font-medium text-slate-400 mb-1.5">

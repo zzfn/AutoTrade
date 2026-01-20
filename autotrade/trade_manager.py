@@ -47,7 +47,6 @@ class TradeManager:
         self.ml_config: dict[str, Any] = {
             "model_name": None,  # None 表示使用最优模型（由 ModelManager 自动选择）
             "top_k": 3,
-            "rebalance_period": 1,
         }
         self.model_manager = ModelManager()
 
@@ -133,7 +132,6 @@ class TradeManager:
                 "symbols": symbols,
                 "model_name": model_name,
                 "top_k": self.ml_config.get("top_k", 3),
-                "rebalance_period": self.ml_config.get("rebalance_period", 1),
                 "sleeptime": "1D",  # ML 策略通常是日频
             }
 
@@ -206,7 +204,6 @@ class TradeManager:
                         "symbols": symbols,
                         "model_name": model_name,
                         "top_k": params.get("top_k", self.ml_config.get("top_k", 3)),
-                        "rebalance_period": params.get("rebalance_period", 1),
                         "sleeptime": "0S",
                         "timestep": "1H" if interval == "1h" else "1D",
                     }
@@ -457,7 +454,7 @@ class TradeManager:
         设置 ML 策略配置
 
         Args:
-            config: 包含 model_name, top_k, rebalance_period 等参数
+            config: 包含 model_name, top_k 等参数
 
         Returns:
             操作结果
@@ -470,8 +467,6 @@ class TradeManager:
             self.ml_config["model_name"] = config["model_name"]
         if "top_k" in config:
             self.ml_config["top_k"] = int(config["top_k"])
-        if "rebalance_period" in config:
-            self.ml_config["rebalance_period"] = int(config["rebalance_period"])
 
         self.log(f"ML 配置更新: {self.ml_config}")
         return {"status": "success", "config": self.ml_config}

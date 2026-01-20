@@ -213,24 +213,6 @@
                   />
                 </div>
 
-                <div>
-                  <label className="block text-xs text-slate-400 mb-1">
-                    再平衡周期 (天)
-                  </label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="30"
-                    value={strategyConfig?.ml_config?.rebalance_period || 1}
-                    onChange={(e) =>
-                      handleMLConfigChange({
-                        rebalance_period: parseInt(e.target.value),
-                      })
-                    }
-                    className="w-full px-3 py-2 rounded-lg text-sm"
-                  />
-                </div>
-
                 <div className="pt-2">
                   <label className="block text-xs text-slate-400 mb-1">
                     当前模型

@@ -354,7 +354,6 @@ class TestQlibMLStrategy:
 
         assert "symbols" in params
         assert "top_k" in params
-        assert "rebalance_period" in params
 
 
 if __name__ == "__main__":

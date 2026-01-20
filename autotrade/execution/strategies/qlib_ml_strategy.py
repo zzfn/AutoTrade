@@ -30,13 +30,12 @@ class QlibMLStrategy(Strategy):
     3. 使用 ML 模型预测收益率
     4. 选择 Top-K 预测分数最高的股票
     5. 等权重分配资金
-    6. 定期再平衡
+    6. 执行交易
 
     策略参数:
         symbols: 候选股票列表
         model_name: 使用的模型名称（如为空则使用当前模型）
         top_k: 持仓股票数量
-        rebalance_period: 再平衡周期（天数）
         lookback_period: 获取历史数据的天数
         sleeptime: 交易迭代间隔
     """
@@ -45,7 +44,6 @@ class QlibMLStrategy(Strategy):
         "symbols": ["SPY", "AAPL", "MSFT", "GOOGL", "AMZN"],
         "model_name": None,  # None 表示使用 ModelManager 的当前模型
         "top_k": 3,
-        "rebalance_period": 1,  # 每天再平衡
         "lookback_period": 60,  # 获取 60 天历史数据
         "sleeptime": "1D",
         "models_dir": "models",
@@ -62,7 +60,6 @@ class QlibMLStrategy(Strategy):
         self.trainer: Optional[LightGBMTrainer] = None
 
         # 状态跟踪
-        self.last_rebalance_date: Optional[datetime] = None
         self.current_predictions: dict = {}
 
         # 加载模型
@@ -71,7 +68,6 @@ class QlibMLStrategy(Strategy):
         self.log_message(f"QlibMLStrategy 初始化完成")
         self.log_message(f"股票池: {self.symbols}")
         self.log_message(f"Top-K: {self.top_k}")
-        self.log_message(f"再平衡周期: {self.rebalance_period} 天")
 
     def _parse_parameters(self):
         """解析策略参数"""
@@ -93,7 +89,6 @@ class QlibMLStrategy(Strategy):
         # 其他参数
         self.model_name = self.parameters.get("model_name")
         self.top_k = self.parameters.get("top_k", 3)
-        self.rebalance_period = self.parameters.get("rebalance_period", 1)
         self.lookback_period = self.parameters.get("lookback_period", 60)
         self.sleeptime = self.parameters.get("sleeptime", "1D")
         self.models_dir = self.parameters.get("models_dir", "models")
@@ -144,55 +139,35 @@ class QlibMLStrategy(Strategy):
         交易迭代 - 核心逻辑
 
         每次迭代：
-        1. 检查是否需要再平衡
-        2. 获取数据和生成预测
-        3. 选择 Top-K 股票
-        4. 调整持仓
+        1. 获取数据和生成预测
+        2. 选择 Top-K 股票
+        3. 调整持仓
         """
         try:
             current_time = self.get_datetime()
 
-            # 检查是否需要再平衡
-            if self._should_rebalance(current_time):
-                self.log_message(f"开始再平衡 ({current_time})")
+            # 获取预测
+            predictions = self._get_predictions()
 
-                # 获取预测
-                predictions = self._get_predictions()
+            if not predictions:
+                self.log_message("无法获取预测，跳过本次交易")
+                return
 
-                if not predictions:
-                    self.log_message("无法获取预测，跳过本次交易")
-                    return
+            # 选择 Top-K
+            top_symbols = self._select_top_k(predictions)
+            self.log_message(f"Top-{self.top_k} 股票: {top_symbols}")
 
-                # 选择 Top-K
-                top_symbols = self._select_top_k(predictions)
-                self.log_message(f"Top-{self.top_k} 股票: {top_symbols}")
+            # 执行交易
+            self._rebalance_portfolio(top_symbols)
 
-                # 执行交易
-                self._rebalance_portfolio(top_symbols)
-
-                # 更新状态
-                self.last_rebalance_date = current_time
-                self.current_predictions = predictions
+            # 更新状态
+            self.current_predictions = predictions
 
         except Exception as e:
             import traceback
 
             self.log_message(f"交易迭代错误: {e}")
             traceback.print_exc()
-
-    def _should_rebalance(self, current_time) -> bool:
-        """检查是否应该再平衡"""
-        if self.last_rebalance_date is None:
-            return True
-
-        if self.interval == "hour":
-            # 如果是小时频率，按小时计算差值
-            hours_since_last = (current_time - self.last_rebalance_date).total_seconds() / 3600
-            return hours_since_last >= self.rebalance_period
-        else:
-            # 默认按天计算
-            days_since_last = (current_time.date() - self.last_rebalance_date.date()).days
-            return days_since_last >= self.rebalance_period
 
     def _get_predictions(self) -> dict:
         """
@@ -365,10 +340,5 @@ class QlibMLStrategy(Strategy):
         return {
             "predictions": self.current_predictions,
             "top_k": self.top_k,
-            "last_rebalance": (
-                self.last_rebalance_date.isoformat()
-                if self.last_rebalance_date
-                else None
-            ),
             "model_loaded": self.trainer is not None,
         }

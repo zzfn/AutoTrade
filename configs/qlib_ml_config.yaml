@@ -80,9 +80,6 @@ strategy:
     # 持仓股票数量
     top_k: 3
 
-    # 再平衡周期（天）
-    rebalance_period: 1
-
     # 交易间隔
     sleeptime: "1D"
 
