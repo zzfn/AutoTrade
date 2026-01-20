@@ -6,6 +6,7 @@ It has been refactored to use the new `ml` and `data` modules for cleaner archit
 """
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 from lumibot.strategies.strategy import Strategy
 from lumibot.entities import Asset
@@ -43,6 +44,7 @@ class QlibMLStrategy(Strategy):
         "lookback_period": 2,  # Fetch 2 days of history (1min: ~780 bars)
         "sleeptime": "1D",
         "models_dir": "models",
+        "position_sizing": "equal",  # "equal" or "weighted"
     }
 
     def initialize(self):
@@ -124,6 +126,11 @@ class QlibMLStrategy(Strategy):
         self.lookback_period = self.parameters.get("lookback_period", 60)
         self.sleeptime = self.parameters.get("sleeptime", "1D")
         self.models_dir = self.parameters.get("models_dir", "models")
+        self.position_sizing = self.parameters.get("position_sizing", "equal")
+        
+        # Validate position_sizing
+        if self.position_sizing not in ("equal", "weighted"):
+            self.position_sizing = "equal"
         
         # Data frequency: 'day', 'hour', or 'minute'
         self.interval = self.parameters.get("interval", "minute")
@@ -196,8 +203,8 @@ class QlibMLStrategy(Strategy):
             top_symbols = self._select_top_k(predictions)
             self.log_message(f"Top-{self.top_k} stocks: {top_symbols}")
 
-            # Execute trades
-            self._rebalance_portfolio(top_symbols)
+            # Execute trades (pass predictions for weighted allocation)
+            self._rebalance_portfolio(top_symbols, predictions)
 
             # Update state
             self.current_predictions = predictions
@@ -363,24 +370,67 @@ class QlibMLStrategy(Strategy):
 
         return sorted_symbols[: self.top_k]
 
-    def _rebalance_portfolio(self, target_symbols: list):
+    def _calculate_target_weights(self, predictions: dict, target_symbols: list) -> dict:
+        """
+        Calculate target weights for each symbol based on position_sizing mode.
+
+        Args:
+            predictions: {symbol: predicted_return} dictionary
+            target_symbols: List of target stock symbols
+
+        Returns:
+            {symbol: weight} dictionary where weights sum to 1.0
+        """
+        if not target_symbols:
+            return {}
+
+        if self.position_sizing == "weighted":
+            # Get prediction scores for target symbols
+            scores = np.array([predictions.get(s, 0.0) for s in target_symbols])
+            
+            # Linear normalization: shift scores to be positive, then normalize
+            # w_i = (s_i - min + epsilon) / sum(s_j - min + epsilon)
+            min_score = np.min(scores)
+            # Shift to make all scores positive (add small epsilon to avoid zero weights)
+            shifted_scores = scores - min_score + 1e-6
+            weights = shifted_scores / np.sum(shifted_scores)
+            
+            return {symbol: float(w) for symbol, w in zip(target_symbols, weights)}
+        else:
+            # Equal weighting (default)
+            weight = 1.0 / len(target_symbols)
+            return {symbol: weight for symbol in target_symbols}
+
+    def _rebalance_portfolio(self, target_symbols: list, predictions: dict = None):
         """
         Rebalance portfolio to target holdings.
 
+        This method uses get_positions() to identify ALL currently held positions,
+        ensuring any "orphan" positions (positions not in self.symbols) are also
+        handled and sold if not in the target list.
+
         Args:
             target_symbols: List of target stock symbols
+            predictions: Optional predictions dict for weighted allocation
         """
-        # Get current positions
+        # Get ALL current positions using get_positions() to catch orphan positions
+        all_positions = self.get_positions()
         current_positions = {}
-        for symbol in self.symbols:
-            pos = self.get_position(symbol)
-            if pos and float(pos.quantity) > 0:
-                current_positions[symbol] = float(pos.quantity)
+        for pos in all_positions:
+            symbol = pos.asset.symbol if hasattr(pos.asset, 'symbol') else str(pos.asset)
+            qty = float(pos.quantity)
+            if qty > 0:
+                current_positions[symbol] = qty
 
-        # Determine stocks to sell
+        # Determine stocks to sell (includes orphan positions not in self.symbols)
         to_sell = set(current_positions.keys()) - set(target_symbols)
 
-        # Sell
+        # Log if we found orphan positions
+        orphans = to_sell - set(self.symbols)
+        if orphans:
+            self.log_message(f"Found orphan positions to sell: {orphans}")
+
+        # Sell positions not in target
         for symbol in to_sell:
             qty = current_positions[symbol]
             self.log_message(f"Selling {symbol}: {qty} shares")
@@ -393,18 +443,24 @@ class QlibMLStrategy(Strategy):
             return
 
         # Reserve 5% cash buffer
-        available_cash = total_value * 0.95
-        target_per_stock = available_cash / len(target_symbols) if target_symbols else 0
+        available_capital = total_value * 0.95
 
-        # Buy/adjust
+        # Calculate target weights
+        if predictions is None:
+            predictions = self.current_predictions or {}
+        weights = self._calculate_target_weights(predictions, target_symbols)
+
+        # Buy/adjust based on weights
         for symbol in target_symbols:
             try:
                 price = self.get_last_price(symbol)
                 if price is None or price <= 0:
                     continue
 
-                # Calculate target quantity
-                target_qty = int(target_per_stock / price)
+                # Calculate target allocation for this symbol
+                weight = weights.get(symbol, 0.0)
+                target_value = available_capital * weight
+                target_qty = int(target_value / price)
 
                 # Get current position
                 current_qty = current_positions.get(symbol, 0)
@@ -420,7 +476,7 @@ class QlibMLStrategy(Strategy):
 
                     if buy_qty > 0:
                         self.log_message(
-                            f"Buying {symbol}: {buy_qty} shares @ ${price:.2f}"
+                            f"Buying {symbol}: {buy_qty} shares @ ${price:.2f} (weight: {weight:.2%})"
                         )
                         order = self.create_order(symbol, buy_qty, "buy")
                         self.submit_order(order)

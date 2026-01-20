@@ -1,0 +1,5 @@
+- [x] Refactor `_rebalance_portfolio` to use `self.get_positions()` for identifying current holdings.
+- [x] Implement `_calculate_target_weights` method to handle `equal` and `weighted` logic.
+- [x] Update `_rebalance_portfolio` to use calculated weights instead of fixed split.
+- [x] Add unit tests for rebalancing logic with "orphan" positions.
+- [x] Add unit tests for weighted allocation.
