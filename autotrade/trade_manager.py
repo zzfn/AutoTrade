@@ -62,6 +62,7 @@ class TradeManager:
             "in_progress": False,
             "progress": 0,
             "message": "",
+            "last_sync": None,
         }
 
         self._initialized = True
@@ -732,6 +733,7 @@ class TradeManager:
                 )
 
                 self.data_sync_status["progress"] = 100
+                self.data_sync_status["last_sync"] = datetime.now().isoformat()
                 self.data_sync_status["message"] = (
                     f"成功同步 {len(symbols)} 只股票的数据 ({interval})"
                 )

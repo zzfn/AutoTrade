@@ -225,6 +225,12 @@ async def models_page(request: Request):
     return templates.TemplateResponse(request, "models.html")
 
 
+@app.get("/data", response_class=HTMLResponse)
+async def data_page(request: Request):
+    """数据中心页面"""
+    return templates.TemplateResponse(request, "data.html")
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
