@@ -41,4 +41,4 @@ steps:
       command_timeout: 2m
       script:
         - kubectl apply -f https://git.ooxo.cc/k8s/yaml/raw/branch/main/deepalpha.yaml
-        - kubectl set image deployment/deep-alpha deep-alpha=hub.ooxo.cc/home/algo-trade:${DRONE_COMMIT_SHA:0:8}
+        - kubectl set image deployment/deep-alpha deep-alpha=hub.ooxo.cc/home/deep-alpha:${DRONE_COMMIT_SHA:0:8}
