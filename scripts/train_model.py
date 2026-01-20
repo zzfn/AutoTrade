@@ -104,17 +104,16 @@ def parse_args():
     parser.add_argument(
         "--interval",
         type=str,
-        default="1d",
-        choices=["1d", "1h"],
-        help="数据频率 (1d 或 1h)",
+        default=None,
+        help="数据频率 (1min, 1h 或 1d)，默认从配置文件读取",
     )
 
     # 其他
     parser.add_argument(
         "--data-dir",
         type=str,
-        default="data/qlib",
-        help="Qlib 数据目录 (默认: data/qlib)",
+        default="datasets",
+        help="Qlib 数据目录 (默认: datasets)",
     )
     parser.add_argument(
         "--models-dir",
@@ -244,6 +243,8 @@ def main():
                 args.train_days = data_conf["train_days"]
             if "valid_days" in data_conf:
                 args.valid_days = data_conf["valid_days"]
+            if "interval" in data_conf and args.interval is None:
+                args.interval = data_conf["interval"]
                 
         # 2. model
         if "model" in config:
@@ -279,6 +280,10 @@ def main():
         for key, value in config.items():
             if hasattr(args, key.replace("-", "_")) and not isinstance(value, dict):
                 setattr(args, key.replace("-", "_"), value)
+
+    # 如果 interval 还是没有设置，使用默认值
+    if args.interval is None:
+        args.interval = "1min"
 
     # 解析参数
     symbols = [s.strip().upper() for s in args.symbols.split(",")]

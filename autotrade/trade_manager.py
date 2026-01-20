@@ -102,10 +102,14 @@ class TradeManager:
                 {"API_KEY": api_key, "API_SECRET": secret_key, "PAPER": paper_trading}
             )
 
-            # 3. Load symbols from config
+            # 3. Load symbols and interval from config
             base_dir = os.path.dirname(os.path.abspath(__file__))
             config_path = os.path.join(base_dir, "../configs/qlib_ml_config.yaml")
             symbols = ["SPY", "QQQ", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA"]  # Default
+            interval = "1min"  # Default
+            lookback_period = 2  # Default
+            top_k = 3  # Default
+            sleeptime = "1M"  # Default
 
             try:
                 if os.path.exists(config_path):
@@ -113,20 +117,32 @@ class TradeManager:
                         config = yaml.safe_load(f)
                         # 支持新的嵌套结构
                         if config:
-                            if "data" in config and "symbols" in config["data"]:
-                                symbols = config["data"]["symbols"]
-                                self.log(f"Loaded symbols from config (merged): {symbols}")
-                            elif "symbols" in config:
-                                symbols = config["symbols"]
-                                self.log(f"Loaded symbols from config (legacy): {symbols}")
-                            else:
-                                self.log("Config loaded but no symbols found. Using default.")
+                            if "data" in config:
+                                data_conf = config["data"]
+                                if "symbols" in data_conf:
+                                    symbols = data_conf["symbols"]
+                                if "interval" in data_conf:
+                                    interval = data_conf["interval"]
+                                if "lookback_period" in data_conf:
+                                    lookback_period = data_conf["lookback_period"]
+
+                            # 从 strategy.ml 读取策略参数
+                            if "strategy" in config and "ml" in config["strategy"]:
+                                ml_conf = config["strategy"]["ml"]
+                                if "top_k" in ml_conf:
+                                    top_k = ml_conf["top_k"]
+                                if "sleeptime" in ml_conf:
+                                    sleeptime = ml_conf["sleeptime"]
+                                if "interval" in ml_conf:
+                                    interval = ml_conf["interval"]
+
+                            self.log(f"从配置文件加载: symbols={len(symbols)}, interval={interval}, lookback={lookback_period}d")
                 else:
                     self.log(
-                        f"Config file not found at {config_path}. Using default symbols."
+                        f"Config file not found at {config_path}. Using default config."
                     )
             except Exception as e:
-                self.log(f"Error reading config file: {e}. Using default symbols.")
+                self.log(f"Error reading config file: {e}. Using default config.")
 
             self.log(f"Starting strategy for symbols: {symbols}")
 
@@ -144,8 +160,10 @@ class TradeManager:
             strategy_params = {
                 "symbols": symbols,
                 "model_name": model_name,
-                "top_k": self.ml_config.get("top_k", 3),
-                "sleeptime": "1D",  # ML 策略通常是日频
+                "top_k": top_k,
+                "sleeptime": sleeptime,
+                "interval": interval,
+                "lookback_period": lookback_period,
             }
 
             strategy = QlibMLStrategy(broker=broker, parameters=strategy_params)
@@ -190,10 +208,27 @@ class TradeManager:
                 if not symbols:
                     symbols = ["SPY"]
 
-                # 3. Parse interval
-                interval = params.get("interval", "1d")
-                if interval not in ["1d", "1h"]:
-                    interval = "1d"
+                # 3. Parse interval (优先从配置文件读取)
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+                config_path = os.path.join(base_dir, "../configs/qlib_ml_config.yaml")
+                interval = params.get("interval", None)
+
+                if interval is None and os.path.exists(config_path):
+                    try:
+                        with open(config_path, "r") as f:
+                            config = yaml.safe_load(f)
+                            if config:
+                                if "data" in config and "interval" in config["data"]:
+                                    interval = config["data"]["interval"]
+                                elif "strategy" in config and "ml" in config["strategy"] and "interval" in config["strategy"]["ml"]:
+                                    interval = config["strategy"]["ml"]["interval"]
+                    except Exception as e:
+                        self.log(f"Error reading config for interval: {e}")
+
+                if interval is None:
+                    interval = "1min"
+                if interval not in ["1d", "1h", "1min"]:
+                    interval = "1min"
 
                 self.log(
                     f"Backtesting {symbols} from {backtesting_start} to {backtesting_end} (Interval: {interval})"
@@ -205,7 +240,12 @@ class TradeManager:
                 try:
                     # Map interval to LumiBot frequency
                     # LumiBot usually uses 'day', 'hour', 'minute', etc.
-                    lumibot_interval = "hour" if interval == "1h" else "day"
+                    if interval == "1min":
+                        lumibot_interval = "minute"
+                    elif interval == "1h":
+                        lumibot_interval = "hour"
+                    else:
+                        lumibot_interval = "day"
 
                     # Strategy.backtest is a blocking call
                     # 如果未指定模型，使用当前最优模型
@@ -218,7 +258,7 @@ class TradeManager:
                         "model_name": model_name,
                         "top_k": params.get("top_k", self.ml_config.get("top_k", 3)),
                         "sleeptime": "0S",
-                        "timestep": "1H" if interval == "1h" else "1D",
+                        "timestep": "1M" if interval == "1min" else ("1H" if interval == "1h" else "1D"),
                     }
 
                     # If multiple symbols, use SPY as benchmark for better clarity
@@ -535,7 +575,7 @@ class TradeManager:
                                             is_recent = True
                                         
                                         if is_recent:
-                                            self.log(f"New Order Found: {order_info['action']} {order_info['quantity']} {order_info['symbol']} @ {order_info['price']}")
+                                            self.log(f"New Order Found [ID:{order_id}] [TM:{id(self)}]: {order_info['action']} {order_info['quantity']} {order_info['symbol']} @ {order_info['price']}")
                                         
                                         self._known_order_ids.add(order_id)
 
@@ -885,12 +925,42 @@ class TradeManager:
                 self.training_status["message"] = "开始模型训练..."
                 self.log("开始模型训练")
 
-                # 默认配置
+                # 默认配置（优先从 YAML 配置文件读取）
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+                config_path = os.path.join(base_dir, "../configs/qlib_ml_config.yaml")
+
+                # 从 YAML 读取默认配置
+                yaml_interval = None
+                yaml_train_days = 30
+                yaml_target_horizon = 60
+
+                if os.path.exists(config_path):
+                    try:
+                        with open(config_path, "r") as f:
+                            yaml_config = yaml.safe_load(f)
+                            if yaml_config:
+                                if "data" in yaml_config:
+                                    if "interval" in yaml_config["data"]:
+                                        yaml_interval = yaml_config["data"]["interval"]
+                                    if "train_days" in yaml_config["data"]:
+                                        yaml_train_days = yaml_config["data"]["train_days"]
+                                if "model" in yaml_config and "target_horizon" in yaml_config["model"]:
+                                    yaml_target_horizon = yaml_config["model"]["target_horizon"]
+                                if "rolling_update" in yaml_config:
+                                    if "interval" in yaml_config["rolling_update"]:
+                                        yaml_interval = yaml_config["rolling_update"].get("interval", yaml_interval)
+                                    if "train_days" in yaml_config["rolling_update"]:
+                                        yaml_train_days = yaml_config["rolling_update"]["train_days"]
+                                    if "target_horizon" in yaml_config["rolling_update"]:
+                                        yaml_target_horizon = yaml_config["rolling_update"]["target_horizon"]
+                    except Exception as e:
+                        self.log(f"Error reading YAML config: {e}")
+
                 train_config = config or {}
                 symbols = train_config.get("symbols", ["SPY", "AAPL", "MSFT"])
-                train_days = train_config.get("train_days", 252)
-                target_horizon = train_config.get("target_horizon", 5)
-                interval = train_config.get("interval", "1d")
+                train_days = train_config.get("train_days", yaml_train_days)
+                target_horizon = train_config.get("target_horizon", yaml_target_horizon)
+                interval = train_config.get("interval", yaml_interval or "1min")
 
                 # 1. 加载数据 (20%)
                 self.training_status["progress"] = 10
@@ -1022,10 +1092,35 @@ class TradeManager:
                 self.data_sync_status["message"] = "准备同步数据..."
                 self.log("开始数据同步")
 
+                # 从 YAML 读取默认配置
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+                config_path = os.path.join(base_dir, "../configs/qlib_ml_config.yaml")
+
+                yaml_interval = None
+                yaml_days = 30
+
+                if os.path.exists(config_path):
+                    try:
+                        with open(config_path, "r") as f:
+                            yaml_config = yaml.safe_load(f)
+                            if yaml_config:
+                                if "data" in yaml_config:
+                                    if "interval" in yaml_config["data"]:
+                                        yaml_interval = yaml_config["data"]["interval"]
+                                    if "train_days" in yaml_config["data"]:
+                                        yaml_days = yaml_config["data"]["train_days"]
+                                if "rolling_update" in yaml_config:
+                                    if "interval" in yaml_config["rolling_update"]:
+                                        yaml_interval = yaml_config["rolling_update"].get("interval", yaml_interval)
+                                    if "train_days" in yaml_config["rolling_update"]:
+                                        yaml_days = yaml_config["rolling_update"]["train_days"]
+                    except Exception as e:
+                        self.log(f"Error reading YAML config: {e}")
+
                 sync_config = config or {}
                 symbols = sync_config.get("symbols", ["SPY", "AAPL", "MSFT"])
-                days = sync_config.get("days", 365)
-                interval = sync_config.get("interval", "1d")
+                days = sync_config.get("days", yaml_days)
+                interval = sync_config.get("interval", yaml_interval or "1min")
                 update_mode = sync_config.get("update_mode", "append")
 
                 adapter = QlibDataAdapter(interval=interval)

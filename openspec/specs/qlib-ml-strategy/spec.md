@@ -9,7 +9,7 @@ TBD - created by archiving change add-qlib-ml-strategy. Update Purpose after arc
 
 - 支持 Alpaca API 作为主要数据源
 - 支持 YFinance 作为备用数据源
-- 数据存储于 `data/qlib/` 目录
+- 数据存储于 `datasets/` 目录
 - 支持增量数据更新
 
 #### Scenario: 获取美股历史数据
@@ -129,4 +129,3 @@ The system SHALL provide a unified interface for training ML models, capable of 
 - **THEN** the process runs asynchronously
 - **AND** UI displays progress similar to previous rolling update
 - **AND** user is notified upon success or failure
-

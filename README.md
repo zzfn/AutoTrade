@@ -158,7 +158,7 @@ configs/
 └── qlib_ml_config.yaml   # ML 策略配置
 
 models/                   # 训练好的模型
-data/qlib/               # Qlib 格式数据
+datasets/                # Qlib 格式数据
 ```
 
 ## 开发

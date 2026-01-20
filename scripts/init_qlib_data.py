@@ -49,8 +49,8 @@ def parse_args():
     parser.add_argument(
         "--data-dir",
         type=str,
-        default="data/qlib",
-        help="数据存储目录 (默认: data/qlib)",
+        default="datasets",
+        help="数据存储目录 (默认: datasets)",
     )
     parser.add_argument(
         "--update-mode",

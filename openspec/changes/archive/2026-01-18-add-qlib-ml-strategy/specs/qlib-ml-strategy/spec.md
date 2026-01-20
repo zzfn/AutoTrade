@@ -12,7 +12,7 @@
 
 - 支持 Alpaca API 作为主要数据源
 - 支持 YFinance 作为备用数据源
-- 数据存储于 `data/qlib/` 目录
+- 数据存储于 `datasets/` 目录
 - 支持增量数据更新
 
 #### Scenario: 获取美股历史数据

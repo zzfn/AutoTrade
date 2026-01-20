@@ -13,14 +13,19 @@ data:
     - META
     - NVDA
     - TSLA
-    - BTC/USD
+
+  # 数据频率：1min, 1h, 1d
+  interval: 1min
 
   # 数据源优先级: alpaca > yfinance
-  data_dir: data/qlib
+  data_dir: datasets
 
   # 历史数据天数
-  train_days: 504 # 约 2 年
-  valid_days: 63 # 约 3 个月
+  train_days: 30 # 1分钟数据量较大，减少天数
+  valid_days: 7
+
+  # 策略回看周期
+  lookback_period: 300
 
 # 特征工程配置
 features:
@@ -68,7 +73,7 @@ model:
   early_stopping_rounds: 50
 
   # 目标变量
-  target_horizon: 5 # 预测未来 5 天收益
+  target_horizon: 60 # 预测未来 60 分钟收益（1分钟数据）
 
 # 策略配置
 strategy:
@@ -81,7 +86,10 @@ strategy:
     top_k: 3
 
     # 交易间隔
-    sleeptime: "1D"
+    sleeptime: "1M"
+
+    # 数据频率
+    interval: 1min
 
 # Walk-Forward 验证配置
 validation:
@@ -93,5 +101,7 @@ validation:
 # Rolling 更新配置
 rolling_update:
   # 默认训练配置
-  train_days: 252
-  target_horizon: 5
+  interval: 1min
+  train_days: 30
+  target_horizon: 60
+  lookback_period: 2

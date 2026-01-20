@@ -105,7 +105,9 @@ class AlpacaDataProvider(BaseDataProvider):
         client = self._get_client()
         
         # 映射 interval 到 Alpaca TimeFrame
-        if interval == "1h":
+        if interval == "1min":
+            tf = TimeFrame.Minute
+        elif interval == "1h":
             tf = TimeFrame.Hour
         else:
             tf = TimeFrame.Day

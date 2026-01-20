@@ -87,20 +87,20 @@ outputs/backtests/*
 # 保留所有子目录中的 .gitkeep
 !outputs/**/.gitkeep
 
-# 数据目录 (data/)
-data/*
-!data/.gitkeep
+# 数据目录 (datasets/)
+datasets/*
+!datasets/.gitkeep
 # 保留子目录结构
-!data/raw/
-!data/processed/
-!data/cache/
+!datasets/raw/
+!datasets/processed/
+!datasets/cache/
 # 忽略子目录内容
-data/raw/*
-!data/raw/.gitkeep
-data/processed/*
-!data/processed/.gitkeep
-data/cache/*
-!data/cache/.gitkeep
+datasets/raw/*
+!datasets/raw/.gitkeep
+datasets/processed/*
+!datasets/processed/.gitkeep
+datasets/cache/*
+!datasets/cache/.gitkeep
 
 # Notebooks
 .ipynb_checkpoints

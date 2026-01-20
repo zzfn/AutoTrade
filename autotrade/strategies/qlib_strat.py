@@ -8,6 +8,7 @@ from typing import Optional
 
 import pandas as pd
 from lumibot.strategies.strategy import Strategy
+from lumibot.entities import Asset
 
 # Import from new module locations
 from autotrade.ml import QlibFeatureGenerator, LightGBMTrainer, ModelManager
@@ -39,7 +40,7 @@ class QlibMLStrategy(Strategy):
         "symbols": ["SPY", "AAPL", "MSFT", "GOOGL", "AMZN"],
         "model_name": None,  # None means use ModelManager's current model
         "top_k": 3,
-        "lookback_period": 60,  # Fetch 60 days of history
+        "lookback_period": 2,  # Fetch 2 days of history (1min: ~780 bars)
         "sleeptime": "1D",
         "models_dir": "models",
     }
@@ -124,9 +125,11 @@ class QlibMLStrategy(Strategy):
         self.sleeptime = self.parameters.get("sleeptime", "1D")
         self.models_dir = self.parameters.get("models_dir", "models")
         
-        # Data frequency: 'day' or 'hour'
-        self.interval = self.parameters.get("interval", "day")
-        if self.interval == "1h":
+        # Data frequency: 'day', 'hour', or 'minute'
+        self.interval = self.parameters.get("interval", "minute")
+        if self.interval == "1min":
+            self.interval = "minute"
+        elif self.interval == "1h":
             self.interval = "hour"
         elif self.interval == "1d":
             self.interval = "day"
@@ -150,7 +153,9 @@ class QlibMLStrategy(Strategy):
                 metadata = self.inference_engine.metadata
                 if 'interval' in metadata:
                     model_interval = metadata['interval']
-                    if model_interval == "1h":
+                    if model_interval == "1min":
+                        self.interval = "minute"
+                    elif model_interval == "1h":
                         self.interval = "hour"
                     elif model_interval == "1d":
                         self.interval = "day"
@@ -179,9 +184,9 @@ class QlibMLStrategy(Strategy):
         """
         try:
             current_time = self.get_datetime()
-
             # Get predictions
             predictions = self._get_predictions()
+            self.log_message(f"wwwwwwwww===Current predictions: {predictions}")
 
             if not predictions:
                 self.log_message("Unable to get predictions, skipping this iteration")
@@ -263,11 +268,13 @@ class QlibMLStrategy(Strategy):
         """
         predictions = {}
 
-        # Batch fetch historical data for all symbols
-        # This is significantly faster than fetching one by one
+        # Create Asset objects for batch fetching
+        assets = [Asset(symbol=s) for s in self.symbols]
+
+        # Batch fetch historical data for all assets
         try:
-            histories = self.get_historical_prices(
-                self.symbols, self.lookback_period, self.interval
+            histories = self.get_historical_prices_for_assets(
+                assets, length=self.lookback_period, timestep=self.interval
             )
         except Exception as e:
             self.log_message(f"Failed to fetch batch history: {e}")
@@ -278,12 +285,13 @@ class QlibMLStrategy(Strategy):
             return predictions
 
         # Process each symbol
-        # histories is expected to be a dict {symbol: Bars/DataFrame}
-        for symbol, history in histories.items():
+        # histories is expected to be a dict {asset: Bars/DataFrame}
+        for asset, history in histories.items():
+            symbol = asset.symbol
             try:
                 if history is None:
                     continue
-                
+
                 # Check for empty data
                 if hasattr(history, 'df') and history.df.empty:
                     continue
@@ -292,8 +300,9 @@ class QlibMLStrategy(Strategy):
 
                 # Use adapter to standardize data format
                 df = lumibot_to_qlib(history, symbol=symbol)
-                
+
                 if len(df) < 30:  # Need enough data for features
+                    self.log_message(f"Insufficient data for {symbol}: {len(df)} bars")
                     continue
 
                 # Generate features

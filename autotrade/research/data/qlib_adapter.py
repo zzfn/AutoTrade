@@ -24,13 +24,13 @@ class QlibDataAdapter:
     负责：
     1. 从数据提供者获取原始数据
     2. 转换为 Qlib 格式
-    3. 存储到 data/qlib/ 目录
+    3. 存储到 datasets/ 目录
     4. 支持增量数据更新
     """
 
     def __init__(
         self,
-        data_dir: str | Path = "data/qlib",
+        data_dir: str | Path = "datasets",
         provider: BaseDataProvider | None = None,
         interval: str = "1d",
     ):
@@ -197,7 +197,15 @@ class QlibDataAdapter:
             dates = df.index.unique()
 
         # 根据频率选择日历文件名
-        cal_name = "day.txt" if self.interval == "1d" else "hour.txt"
+        if self.interval == "1d":
+            cal_name = "day.txt"
+            format_str = "%Y-%m-%d"
+        elif self.interval == "1min":
+            cal_name = "min.txt"
+            format_str = "%Y-%m-%d %H:%M:%S"
+        else:  # 1h
+            cal_name = "hour.txt"
+            format_str = "%Y-%m-%d %H:%M:%S"
         calendar_file = self.calendars_dir / cal_name
 
         # 加载现有日历
@@ -207,7 +215,6 @@ class QlibDataAdapter:
                 existing_dates = set(line.strip() for line in f)
 
         # 合并并排序
-        format_str = "%Y-%m-%d" if self.interval == "1d" else "%Y-%m-%d %H:%M:%S"
         all_dates = sorted(
             existing_dates
             | set(pd.to_datetime(d).strftime(format_str) for d in dates)
