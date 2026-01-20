@@ -63,7 +63,17 @@ Thumbs.db
 .opencode/*/.tmp*
 .opencode/*/*.log
 
+# Python tools
+.ruff_cache/
+
 # AutoTrade 项目特定忽略
+models/*
+!models/.gitkeep
+.current_model
+
+reports/*
+!reports/.gitkeep
+
 
 # 运行时输出 (outputs/)
 outputs/logs/*.log
