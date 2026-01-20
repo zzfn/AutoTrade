@@ -127,7 +127,7 @@ class QlibMLStrategy(Strategy):
         self.sleeptime = self.parameters.get("sleeptime", "1D")
         self.models_dir = self.parameters.get("models_dir", "models")
         self.position_sizing = self.parameters.get("position_sizing", "equal")
-        
+
         # Validate position_sizing
         if self.position_sizing not in ("equal", "weighted"):
             self.position_sizing = "equal"
@@ -419,22 +419,36 @@ class QlibMLStrategy(Strategy):
         for pos in all_positions:
             symbol = pos.asset.symbol if hasattr(pos.asset, 'symbol') else str(pos.asset)
             qty = float(pos.quantity)
-            if qty > 0:
-                current_positions[symbol] = qty
+            # Track both long (qty > 0) and short (qty < 0) positions
+            current_positions[symbol] = qty
 
-        # Determine stocks to sell (includes orphan positions not in self.symbols)
-        to_sell = set(current_positions.keys()) - set(target_symbols)
+        # Determine stocks to close (includes orphan positions not in self.symbols)
+        to_close = set(current_positions.keys()) - set(target_symbols)
 
         # Log if we found orphan positions
-        orphans = to_sell - set(self.symbols)
+        orphans = to_close - set(self.symbols)
         if orphans:
-            self.log_message(f"Found orphan positions to sell: {orphans}")
+            self.log_message(f"Found orphan positions to close: {orphans}")
 
-        # Sell positions not in target
-        for symbol in to_sell:
+        # Close positions not in target (handle both long and short)
+        for symbol in to_close:
             qty = current_positions[symbol]
-            self.log_message(f"Selling {symbol}: {qty} shares")
-            order = self.create_order(symbol, qty, "sell")
+            if qty == 0:
+                continue
+
+            # Determine close side based on position direction
+            if qty > 0:
+                # Close long position: sell the shares
+                side = "sell"
+                close_qty = qty
+                self.log_message(f"Closing long {symbol}: {close_qty} shares (selling)")
+            else:
+                # Close short position: buy to cover
+                side = "buy"
+                close_qty = abs(qty)
+                self.log_message(f"Closing short {symbol}: {close_qty} shares (buying to cover)")
+
+            order = self.create_order(symbol, close_qty, side)
             self.submit_order(order)
 
         # Calculate target amounts
@@ -464,6 +478,15 @@ class QlibMLStrategy(Strategy):
 
                 # Get current position
                 current_qty = current_positions.get(symbol, 0)
+                if current_qty < 0:
+                    cover_qty = abs(current_qty)
+                    if cover_qty > 0:
+                        self.log_message(
+                            f"Covering short {symbol}: {cover_qty} shares (buying to cover)"
+                        )
+                        order = self.create_order(symbol, cover_qty, "buy")
+                        self.submit_order(order)
+                    current_qty = 0
 
                 # Calculate difference
                 diff = target_qty - current_qty

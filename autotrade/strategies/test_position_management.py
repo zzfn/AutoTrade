@@ -90,19 +90,34 @@ class MockStrategy:
         for pos in all_positions:
             symbol = pos.asset.symbol if hasattr(pos.asset, 'symbol') else str(pos.asset)
             qty = float(pos.quantity)
-            if qty > 0:
-                current_positions[symbol] = qty
+            # Track both long (qty > 0) and short (qty < 0) positions
+            current_positions[symbol] = qty
 
-        to_sell = set(current_positions.keys()) - set(target_symbols)
-        
-        orphans = to_sell - set(self.symbols)
+        to_close = set(current_positions.keys()) - set(target_symbols)
+
+        orphans = to_close - set(self.symbols)
         if orphans:
-            self.log_message(f"Found orphan positions to sell: {orphans}")
+            self.log_message(f"Found orphan positions to close: {orphans}")
 
-        for symbol in to_sell:
+        # Close positions not in target (handle both long and short)
+        for symbol in to_close:
             qty = current_positions[symbol]
-            self.log_message(f"Selling {symbol}: {qty} shares")
-            order = self.create_order(symbol, qty, "sell")
+            if qty == 0:
+                continue
+
+            # Determine close side based on position direction
+            if qty > 0:
+                # Close long position: sell the shares
+                side = "sell"
+                close_qty = qty
+                self.log_message(f"Closing long {symbol}: {close_qty} shares (selling)")
+            else:
+                # Close short position: buy to cover
+                side = "buy"
+                close_qty = abs(qty)
+                self.log_message(f"Closing short {symbol}: {close_qty} shares (buying to cover)")
+
+            order = self.create_order(symbol, close_qty, side)
             self.submit_order(order)
 
         total_value = self.portfolio_value or self.get_cash()
@@ -125,6 +140,15 @@ class MockStrategy:
             target_qty = int(target_value / price)
 
             current_qty = current_positions.get(symbol, 0)
+            if current_qty < 0:
+                cover_qty = abs(current_qty)
+                if cover_qty > 0:
+                    self.log_message(
+                        f"Covering short {symbol}: {cover_qty} shares (buying to cover)"
+                    )
+                    order = self.create_order(symbol, cover_qty, "buy")
+                    self.submit_order(order)
+                current_qty = 0
             diff = target_qty - current_qty
 
             if diff > 0:
@@ -329,6 +353,130 @@ class TestEmptyTargets:
         # Both positions should be sold
         sell_orders = [o for o in strategy.orders if o["side"] == "sell"]
         assert len(sell_orders) == 2
+
+
+
+
+class TestLongShortPositions:
+    """Test long and short position handling."""
+
+    def test_short_position_closing_with_buy(self):
+        """Short positions should be closed with buy orders."""
+        strategy = MockStrategy(symbols=["AAPL", "MSFT", "GOOGL"])
+
+        # Create positions including a short position
+        strategy._positions = [
+            MockPosition("AAPL", 100),   # Long
+            MockPosition("TSLA", -50),   # Short (orphan)
+        ]
+
+        # Rebalance to only AAPL
+        target_symbols = ["AAPL"]
+        predictions = {"AAPL": 0.1}
+
+        strategy._rebalance_portfolio(target_symbols, predictions)
+
+        # Verify short was detected
+        assert any("short" in log.lower() for log in strategy.logs), \
+            f"Expected short position log, got: {strategy.logs}"
+
+        # Verify TSLA short was closed with a buy order
+        buy_orders = [o for o in strategy.orders if o["side"] == "buy" and o["symbol"] == "TSLA"]
+        assert len(buy_orders) == 1
+        assert buy_orders[0]["quantity"] == 50  # abs(-50)
+
+    def test_long_position_closing_with_sell(self):
+        """Long positions should be closed with sell orders."""
+        strategy = MockStrategy(symbols=["AAPL", "MSFT"])
+
+        strategy._positions = [
+            MockPosition("AAPL", 100),
+            MockPosition("MSFT", 50),
+        ]
+
+        # Rebalance to only AAPL
+        target_symbols = ["AAPL"]
+        predictions = {"AAPL": 0.1}
+
+        strategy._rebalance_portfolio(target_symbols, predictions)
+
+        # Verify MSFT long was closed with a sell order
+        sell_orders = [o for o in strategy.orders if o["side"] == "sell" and o["symbol"] == "MSFT"]
+        assert len(sell_orders) == 1
+        assert sell_orders[0]["quantity"] == 50
+
+    def test_mixed_long_and_short_portfolio(self):
+        """Test portfolio with both long and short positions."""
+        strategy = MockStrategy(symbols=["AAPL", "MSFT", "GOOGL"])
+
+        # Mixed portfolio
+        strategy._positions = [
+            MockPosition("AAPL", 100),   # Long
+            MockPosition("MSFT", -30),   # Short
+            MockPosition("GOOGL", 50),   # Long
+        ]
+
+        # Rebalance to AAPL and GOOGL (close MSFT short)
+        target_symbols = ["AAPL", "GOOGL"]
+        predictions = {"AAPL": 0.1, "GOOGL": 0.05}
+
+        strategy._rebalance_portfolio(target_symbols, predictions)
+
+        # MSFT should be closed
+        close_orders = [o for o in strategy.orders if o["symbol"] == "MSFT"]
+        assert len(close_orders) == 1
+        assert close_orders[0]["side"] == "buy"  # Buy to cover short
+        assert close_orders[0]["quantity"] == 30
+
+        # AAPL and GOOGL should NOT be closed
+        aapl_close = [o for o in strategy.orders if o["symbol"] == "AAPL"]
+        googl_close = [o for o in strategy.orders if o["symbol"] == "GOOGL"]
+        assert len(aapl_close) == 0
+        assert len(googl_close) == 0
+
+    def test_all_short_positions_closed(self):
+        """All short positions should be closed when target is empty."""
+        strategy = MockStrategy(symbols=["AAPL", "MSFT"])
+
+        strategy._positions = [
+            MockPosition("AAPL", -50),   # Short
+            MockPosition("MSFT", -30),   # Short
+        ]
+
+        strategy._rebalance_portfolio([], {})
+
+        # Both shorts should be closed with buy orders
+        buy_orders = [o for o in strategy.orders if o["side"] == "buy"]
+        assert len(buy_orders) == 2
+
+        # Verify quantities
+        aapl_buy = [o for o in buy_orders if o["symbol"] == "AAPL"]
+        msft_buy = [o for o in buy_orders if o["symbol"] == "MSFT"]
+        assert len(aapl_buy) == 1 and aapl_buy[0]["quantity"] == 50
+        assert len(msft_buy) == 1 and msft_buy[0]["quantity"] == 30
+
+    def test_orphan_short_position_detected(self):
+        """Orphan short positions should be logged and closed."""
+        strategy = MockStrategy(symbols=["AAPL", "MSFT"])
+
+        strategy._positions = [
+            MockPosition("AAPL", 100),
+            MockPosition("TSLA", -40),  # Orphan short
+        ]
+
+        target_symbols = ["AAPL"]
+        predictions = {"AAPL": 0.1}
+
+        strategy._rebalance_portfolio(target_symbols, predictions)
+
+        # Should detect orphan
+        assert any("orphan" in log.lower() for log in strategy.logs)
+
+        # Should close TSLA short with buy
+        tsla_orders = [o for o in strategy.orders if o["symbol"] == "TSLA"]
+        assert len(tsla_orders) == 1
+        assert tsla_orders[0]["side"] == "buy"
+        assert tsla_orders[0]["quantity"] == 40
 
 
 if __name__ == "__main__":
