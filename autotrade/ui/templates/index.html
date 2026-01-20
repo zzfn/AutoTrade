@@ -280,6 +280,7 @@
                     <th className="p-4 font-medium">时间</th>
                     <th className="p-4 font-medium">代码</th>
                     <th className="p-4 font-medium">操作</th>
+                    <th className="p-4 font-medium">意图</th>
                     <th className="p-4 font-medium">数量</th>
                     <th className="p-4 font-medium">价格</th>
                     <th className="p-4 font-medium">状态</th>
@@ -305,6 +306,9 @@
                         >
                           {order.action}
                         </span>
+                      </td>
+                      <td className="p-4 text-xs font-mono text-slate-400 uppercase">
+                        {order.intent || "-"}
                       </td>
                       <td className="p-4">{order.quantity}</td>
                       <td className="p-4 text-slate-400">
