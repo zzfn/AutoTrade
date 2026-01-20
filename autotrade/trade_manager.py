@@ -309,86 +309,110 @@ class TradeManager:
                         self.active_strategy, "get_datetime"
                     ):
                         # Only update if the strategy is actually initialized and running
-                        # Note: We use a try-except because LumiBot methods might fail if not ready
                         try:
-                            cash = float(self.active_strategy.get_cash())
-                            value = float(self.active_strategy.portfolio_value)
+                            # 1. Update Portfolio (Cash and Value)
+                            try:
+                                cash = float(self.active_strategy.get_cash())
+                                value = float(self.active_strategy.portfolio_value)
+                            except Exception as e:
+                                # Fallback if get_cash or portfolio_value fails
+                                cash = 0.0
+                                value = 0.0
+                                # self.log(f"Debug: Failed to get cash/value: {e}")
 
-                            # Get symbols from the strategy
-                            symbols = getattr(self.active_strategy, "symbols", [])
+                            # 2. Update Positions
                             positions_data = []
-                            for symbol in symbols:
-                                pos = self.active_strategy.get_position(symbol)
-                                if pos:
+                            try:
+                                # use get_positions() to get all actual positions from lumibot
+                                all_positions = self.active_strategy.get_positions()
+                                for pos in all_positions:
+                                    if float(pos.quantity) == 0:
+                                        continue
+                                        
+                                    symbol = pos.asset.symbol
+                                    # Try to get the last price for the symbol
+                                    last_price = 0.0
+                                    try:
+                                        if hasattr(self.active_strategy, "get_last_price"):
+                                            last_price = float(self.active_strategy.get_last_price(symbol))
+                                    except:
+                                        pass
+
+                                    # Lumibot attributes can vary by version
+                                    avg_price = float(getattr(pos, "avg_fill_price", getattr(pos, "average_price", 0.0)))
+                                    upl = float(getattr(pos, "unrealized_pl", getattr(pos, "pnl", 0.0)))
+                                    uplpc = float(getattr(pos, "unrealized_plpc", getattr(pos, "pnl_percent", 0.0)))
+
                                     positions_data.append(
                                         {
                                             "symbol": symbol,
                                             "quantity": float(pos.quantity),
-                                            "average_price": float(pos.average_price),
-                                            "current_price": float(
-                                                self.active_strategy.get_last_price(
-                                                    symbol
-                                                )
-                                            )
-                                            if hasattr(
-                                                self.active_strategy, "get_last_price"
-                                            )
-                                            else 0.0,
-                                            "unrealized_pl": float(pos.unrealized_pl)
-                                            if hasattr(pos, "unrealized_pl")
-                                            else 0.0,
-                                            "unrealized_plpc": float(
-                                                pos.unrealized_plpc
-                                            )
-                                            if hasattr(pos, "unrealized_plpc")
-                                            else 0.0,
+                                            "average_price": avg_price,
+                                            "current_price": last_price,
+                                            "unrealized_pl": upl,
+                                            "unrealized_plpc": uplpc,
+                                            "asset_class": getattr(pos.asset, "asset_class", "stock"),
                                         }
                                     )
+                            except Exception as e:
+                                self.log(f"Debug: Error updating positions: {e}")
 
-                            # Sync orders
-                            lumi_orders = self.active_strategy.get_orders()
-                            current_order_ids = [o["id"] for o in self.state["orders"]]
+                            # 3. Sync orders
+                            try:
+                                lumi_orders = self.active_strategy.get_orders()
+                                current_order_ids = [o["id"] for o in self.state["orders"]]
 
-                            for o in lumi_orders:
-                                order_id = str(o.identifier)
-                                if order_id not in current_order_ids:
-                                    order_info = {
-                                        "id": order_id,
-                                        "symbol": o.asset.symbol,
-                                        "action": str(o.side).upper(),
-                                        "quantity": float(o.quantity),
-                                        "price": float(o.price) if o.price else 0.0,
-                                        "status": str(o.status),
-                                        "timestamp": self.active_strategy.get_datetime().isoformat(),
-                                    }
-                                    self.add_order(order_info)
-                                    self.log(
-                                        f"New Order: {order_info['action']} {order_info['quantity']} {order_info['symbol']} @ {order_info['price']}"
-                                    )
-                                else:
-                                    # Update status of existing orders if they changed
-                                    for existing in self.state["orders"]:
-                                        if existing["id"] == order_id and existing[
-                                            "status"
-                                        ] != str(o.status):
-                                            existing["status"] = str(o.status)
-                                            self.log(
-                                                f"Order Update: {order_id} is now {str(o.status)}"
-                                            )
+                                for o in lumi_orders:
+                                    order_id = str(o.identifier)
+                                    if order_id not in current_order_ids:
+                                        order_info = {
+                                            "id": order_id,
+                                            "symbol": o.asset.symbol,
+                                            "action": str(o.side).upper(),
+                                            "quantity": float(o.quantity),
+                                            "price": float(o.price) if o.price else 0.0,
+                                            "status": str(o.status),
+                                            "timestamp": self.active_strategy.get_datetime().isoformat(),
+                                        }
+                                        self.add_order(order_info)
+                                        self.log(
+                                            f"New Order: {order_info['action']} {order_info['quantity']} {order_info['symbol']} @ {order_info['price']}"
+                                        )
+                                    else:
+                                        # Update status of existing orders if they changed
+                                        for existing in self.state["orders"]:
+                                            if existing["id"] == order_id and existing[
+                                                "status"
+                                            ] != str(o.status):
+                                                existing["status"] = str(o.status)
+                                                self.log(
+                                                    f"Order Update: {order_id} is now {str(o.status)}"
+                                                )
+                            except Exception as e:
+                                # self.log(f"Debug: Error updating orders: {e}")
+                                pass
 
-                            market_status = (
-                                "open"
-                                if self.active_strategy.get_datetime().weekday() < 5
-                                else "closed"
-                            )
+                            # 4. Update overall status
+                            try:
+                                dt = self.active_strategy.get_datetime()
+                                market_status = (
+                                    "open"
+                                    if dt and dt.weekday() < 5
+                                    else "closed"
+                                )
+                            except:
+                                market_status = "unknown"
+
                             self.update_portfolio(
                                 cash, value, positions_data, market_status=market_status
                             )
-                        except:
-                            pass  # Might not be fully initialized yet
+                        except Exception as e:
+                            # self.log(f"Inner monitor error: {e}")
+                            pass
                 except Exception as e:
-                    print(f"Monitor error: {e}")
+                    print(f"Outer Monitor error: {e}")
                 time.sleep(1)  # Poll every 1 second
+
 
         self.is_running = True
         self.update_status("running")
