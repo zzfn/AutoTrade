@@ -30,6 +30,10 @@ RUN uv sync
 # 创建必要的目录
 RUN mkdir -p /app/logs /app/reports
 
+# 预生成 matplotlib 字体缓存（避免运行时卡住）
+ENV MPLBACKEND=Agg
+RUN uv run python -c "import matplotlib.font_manager; matplotlib.font_manager._load_fontmanager(try_read_cache=False)"
+
 EXPOSE 8000
 
 # 设置默认命令
