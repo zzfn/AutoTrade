@@ -5,13 +5,16 @@ AutoTrade 主入口点。
 - 后台线程：FastAPI + Uvicorn (UI 服务器)
 - 主线程：LumiBot 策略执行
 """
-import os
 import sys
 
 # ==============================================================================
 # 加速 matplotlib 初始化（必须在其他导入之前！）
 # ==============================================================================
 # 使用非交互式后端，跳过不必要的 GUI 初始化
+import os
+import matplotlib
+matplotlib.use('Agg')
+os.environ['MPLCONFIGDIR'] = '/tmp/matplotlib_cache' # 确保有地方写缓存
 os.environ.setdefault("MPLBACKEND", "Agg")
 # 禁用字体管理器的自动扫描日志
 import logging
