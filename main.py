@@ -53,7 +53,31 @@ def setup_logging():
 # 最简单的 LumiBot 策略
 # =============================================================================
 
-# 细粒度追踪 import 过程
+# =============================================================================
+# Import 追踪器：找出到底卡在哪个模块
+# =============================================================================
+import sys
+import builtins
+
+_original_import = builtins.__import__
+_import_depth = 0
+
+def _tracing_import(name, *args, **kwargs):
+    global _import_depth
+    # 只追踪顶层和 lumibot 相关的 import
+    if _import_depth == 0 or name.startswith(('lumibot', 'pandas', 'numpy', 'sklearn', 'torch', 'tensorflow')):
+        print(f"[IMPORT] {name}", flush=True)
+    _import_depth += 1
+    try:
+        return _original_import(name, *args, **kwargs)
+    finally:
+        _import_depth -= 1
+
+# 启用 import 追踪
+builtins.__import__ = _tracing_import
+print("[BOOT] Import 追踪已启用", flush=True)
+
+# 开始 import
 print("[BOOT] Step 1: import matplotlib...", flush=True)
 import matplotlib
 print(f"[BOOT] Step 1 done: matplotlib {matplotlib.__version__}", flush=True)
@@ -63,8 +87,12 @@ import matplotlib.font_manager
 print("[BOOT] Step 2 done", flush=True)
 
 print("[BOOT] Step 3: import lumibot.strategies.strategy...", flush=True)
-from lumibot.strategies.strategy import Strategy
+from lumibot.strategies import Strategy
 print("[BOOT] Step 3 done", flush=True)
+
+# 关闭追踪
+builtins.__import__ = _original_import
+print("[BOOT] Import 追踪已关闭", flush=True)
 
 print("[BOOT] Step 4: import lumibot.brokers...", flush=True)
 from lumibot.brokers import Alpaca
