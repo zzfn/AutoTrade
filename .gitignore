@@ -104,3 +104,4 @@ datasets/cache/*
 
 # Notebooks
 .ipynb_checkpoints
+k8s/secret.yaml

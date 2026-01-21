@@ -27,6 +27,9 @@ RUN uv sync --no-install-project
 COPY . .
 RUN uv sync
 
+# 创建必要的目录
+RUN mkdir -p /app/logs /app/reports
+
 EXPOSE 8000
 
 # 设置默认命令

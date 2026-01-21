@@ -34,22 +34,17 @@ if __name__ == "__main__":
     else:
         print("🔧 开发模式")
     
-    # 导入并运行分离架构
-    from autotrade.web.server import (
-        start_server_background,
-        run_strategy_main,
-        stop_server_background,
-        logger,
-    )
+    # 导入 UI 服务器和策略运行器
+    from autotrade.web.server import start_server_background, stop_server_background
+    from autotrade.strategies.runner import run_strategy_main, logger
     import signal
-    
+
     # 设置信号处理器
     def signal_handler(sig, frame):
         logger.info("收到终止信号，正在清理...")
-        from autotrade.web.server import is_running
-        # 使用模块级变量
-        import autotrade.web.server as server_module
-        server_module.is_running = False
+        # 设置策略停止标志
+        import autotrade.strategies.runner as runner_module
+        runner_module.is_running = False
         stop_server_background()
         sys.exit(0)
     
