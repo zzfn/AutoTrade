@@ -8,6 +8,15 @@ AutoTrade 主入口点。
 import os
 import sys
 
+# ==============================================================================
+# 加速 matplotlib 初始化（必须在其他导入之前！）
+# ==============================================================================
+# 使用非交互式后端，跳过不必要的 GUI 初始化
+os.environ.setdefault("MPLBACKEND", "Agg")
+# 禁用字体管理器的自动扫描日志
+import logging
+logging.getLogger("matplotlib.font_manager").setLevel(logging.WARNING)
+
 
 def is_running_in_docker() -> bool:
     """检测是否在 Docker/Kubernetes 容器中运行"""
