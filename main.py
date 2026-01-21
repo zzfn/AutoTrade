@@ -96,38 +96,42 @@ def is_running_in_docker() -> bool:
 
 def main():
     """主函数"""
-    print("=" * 60)
-    print("AutoTrade - 最简 LumiBot 测试")
-    print("=" * 60)
+    # 初始化日志
+    logger = setup_logging()
+
+    logger.info("=" * 60)
+    logger.info("AutoTrade - 最简 LumiBot 测试")
+    logger.info("=" * 60)
 
     # 检测运行环境
     in_docker = is_running_in_docker()
     if in_docker:
-        print("🐳 Docker 模式")
+        logger.info("🐳 Docker 模式")
     else:
-        print("🔧 开发模式")
+        logger.info("🔧 开发模式")
 
     # 检查环境变量
     api_key = os.getenv("ALPACA_API_KEY")
     secret_key = os.getenv("ALPACA_API_SECRET")
 
     if not api_key or not secret_key:
-        print("\n❌ 错误: 未设置 Alpaca 凭证")
-        print("\n请设置以下环境变量:")
-        print("  export ALPACA_API_KEY=your_key")
-        print("  export ALPACA_API_SECRET=your_secret")
-        print("\n或在 .env 文件中配置:")
-        print("  ALPACA_API_KEY=your_key")
-        print("  ALPACA_API_SECRET=your_secret")
+        logger.error("未设置 Alpaca 凭证")
+        logger.info("请设置以下环境变量:")
+        logger.info("  export ALPACA_API_KEY=your_key")
+        logger.info("  export ALPACA_API_SECRET=your_secret")
+        logger.info("或在 .env 文件中配置:")
+        logger.info("  ALPACA_API_KEY=your_key")
+        logger.info("  ALPACA_API_SECRET=your_secret")
         sys.exit(1)
 
-    print(f"\n✓ 凭证已加载 (Paper Trading)")
-    print("-" * 60)
+    logger.info("凭证已加载 (Paper Trading)")
+    logger.debug(f"API Key: {api_key[:10]}...{api_key[-4:]}")
 
     # 设置信号处理
     import signal
+
     def signal_handler(sig, frame):
-        print("\n\n收到终止信号，正在停止...")
+        logger.info("收到终止信号，正在停止...")
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
@@ -135,40 +139,43 @@ def main():
 
     try:
         # 创建 Broker
-        print("正在连接 Alpaca...")
-        broker = Alpaca({
-            "API_KEY": api_key,
-            "API_SECRET": secret_key,
-            "PAPER": True,  # Paper Trading
-        })
+        logger.info("正在连接 Alpaca...")
+        broker = Alpaca(
+            {
+                "API_KEY": api_key,
+                "API_SECRET": secret_key,
+                "PAPER": True,  # Paper Trading
+            }
+        )
+        logger.info("Alpaca 连接成功")
 
         # 创建策略
+        logger.info("正在创建策略...")
         strategy = SimpleTestStrategy(
             broker=broker,
             parameters={
                 "symbol": "SPY",
                 "sleeptime": "1M",
-            }
+            },
         )
+        logger.info(f"策略已创建: {strategy.__class__.__name__}")
 
         # 创建 Trader
         trader = Trader()
         trader.add_strategy(strategy)
+        logger.info("策略已添加到 Trader")
 
-        print("✓ 策略已加载")
-        print("-" * 60)
-        print("开始运行策略... (Ctrl+C 停止)")
-        print("=" * 60)
+        logger.info("-" * 60)
+        logger.info("开始运行策略... (Ctrl+C 停止)")
+        logger.info("=" * 60)
 
         # 运行策略（阻塞）
         trader.run_all()
 
     except KeyboardInterrupt:
-        print("\n策略已手动停止")
+        logger.warning("策略已手动停止")
     except Exception as e:
-        print(f"\n❌ 运行出错: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"运行出错: {e}", exc_info=True)
         sys.exit(1)
 
 
