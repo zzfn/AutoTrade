@@ -4,8 +4,22 @@ AutoTrade 主入口 - 最简 LumiBot 测试案例
 
 仅用于测试 LumiBot 框架是否能正常运行
 """
-import os
+# =============================================================================
+# 关键：禁用 Python 输出缓冲，确保日志立即显示
+# =============================================================================
 import sys
+import os
+
+# 强制无缓冲输出（容器环境必须）
+os.environ["PYTHONUNBUFFERED"] = "1"
+sys.stdout.reconfigure(line_buffering=True) if hasattr(sys.stdout, 'reconfigure') else None
+sys.stderr.reconfigure(line_buffering=True) if hasattr(sys.stderr, 'reconfigure') else None
+
+# 立即打印启动信息（在任何复杂 import 之前）
+print("[BOOT] AutoTrade main.py 开始执行...", flush=True)
+print(f"[BOOT] Python: {sys.version}", flush=True)
+print(f"[BOOT] 工作目录: {os.getcwd()}", flush=True)
+
 import logging
 
 
@@ -38,9 +52,11 @@ def setup_logging():
 # =============================================================================
 # 最简单的 LumiBot 策略
 # =============================================================================
+print("[BOOT] 正在 import lumibot...", flush=True)
 from lumibot.strategies.strategy import Strategy
 from lumibot.brokers import Alpaca
 from lumibot.traders import Trader
+print("[BOOT] lumibot import 完成", flush=True)
 
 
 class SimpleTestStrategy(Strategy):
