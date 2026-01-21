@@ -1,7 +1,7 @@
 # AutoTrade Makefile
 # ==================
 
-.PHONY: help install dev run test lint format clean check all
+.PHONY: help install dev run test lint format clean check all docker-build docker-run k8s-deploy k8s-delete k8s-logs k8s-status k8s-run k8s-delete-pod
 
 # 默认目标：显示帮助信息
 help:
@@ -26,6 +26,18 @@ help:
 	@echo ""
 	@echo "清理:"
 	@echo "  make clean       - 清理缓存文件"
+	@echo ""
+	@echo "Docker:"
+	@echo "  make docker-build    - 构建 Docker 镜像"
+	@echo "  make docker-run      - 运行 Docker 容器"
+	@echo ""
+	@echo "Kubernetes:"
+	@echo "  make k8s-run         - 快速运行 Pod (推荐)"
+	@echo "  make k8s-delete-pod  - 删除 Pod"
+	@echo "  make k8s-deploy      - 完整部署 (Deployment + Service)"
+	@echo "  make k8s-delete      - 删除完整部署"
+	@echo "  make k8s-logs        - 查看日志"
+	@echo "  make k8s-status      - 查看状态"
 	@echo ""
 	@echo "组合命令:"
 	@echo "  make all         - 格式化 + 检查 + 测试"
@@ -113,3 +125,60 @@ clean:
 
 # 格式化 + 检查 + 测试
 all: format lint test
+
+# ==================
+# Docker
+# ==================
+
+# 构建 Docker 镜像
+docker-build:
+	@echo "📦 构建 Docker 镜像..."
+	./scripts/docker-build.sh
+
+# 运行 Docker 容器
+docker-run:
+	@echo "🚀 运行 Docker 容器..."
+	docker run -it --rm \
+		-p 8000:8000 \
+		--env-file .env \
+		-v $(PWD)/logs:/app/logs \
+		-v $(PWD)/reports:/app/reports \
+		autotrade:latest
+
+# ==================
+# Kubernetes
+# ==================
+
+# 快速运行 Pod（仅 Pod，最简单）
+k8s-run:
+	@echo "🚀 快速部署 Pod..."
+	./scripts/k8s-run.sh
+
+# 删除 Pod
+k8s-delete-pod:
+	@echo "🗑️  删除 Pod..."
+	./scripts/k8s-delete-pod.sh
+
+# 完整部署（Deployment + Service）
+k8s-deploy:
+	@echo "🚀 部署到 Kubernetes..."
+	./scripts/k8s-deploy.sh
+
+# 删除 Kubernetes 部署
+k8s-delete:
+	@echo "🗑️  删除 Kubernetes 部署..."
+	./scripts/k8s-delete.sh
+
+# 查看 Kubernetes 日志
+k8s-logs:
+	kubectl logs -f deployment/autotrade
+
+# 查看 Kubernetes 状态
+k8s-status:
+	@echo "📊 Kubernetes 资源状态:"
+	@echo ""
+	kubectl get pods
+
+# 查看特定 Pod 的状态
+k8s-pod-status:
+	kubectl get pod autotrade -o wide
