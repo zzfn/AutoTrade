@@ -1,26 +1,23 @@
-import argparse
+import os
 
 import uvicorn
 
 
-def main():
-    parser = argparse.ArgumentParser(description="AutoTrade CLI")
-    parser.add_argument(
-        "command",
-        nargs="?",
-        default="run",
-        help="Command to run: 'run' to start web server",
-    )
-    args = parser.parse_args()
-
-    if args.command == "run":
-        print("Starting AutoTrade Web Server (FastAPI + React)...")
-        # Using reload=True for dev experience as requested
-        uvicorn.run("autotrade.web.server:app", host="0.0.0.0", port=8000, reload=True)
-    else:
-        print(f"Unknown command: {args.command}")
-        print("Available commands: run")
+def is_running_in_docker() -> bool:
+    """检测是否在 Docker 容器中运行"""
+    return os.path.exists("/.dockerenv")
 
 
 if __name__ == "__main__":
-    main()
+    print("Starting AutoTrade Web Server (FastAPI + React)...")
+    reload = not is_running_in_docker()
+    if reload:
+        print("🔧 Development mode: hot reload enabled")
+    else:
+        print("🐳 Docker mode: hot reload disabled")
+    uvicorn.run(
+        "autotrade.web.server:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=reload,
+    )
