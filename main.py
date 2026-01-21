@@ -10,9 +10,15 @@ import sys
 # ==============================================================================
 # 加速 matplotlib 初始化（必须在其他导入之前！）
 # ==============================================================================
+from unittest.mock import MagicMock
+
+# 伪造一个假的 font_manager，让它啥也不干（避免字体扫描）
+sys.modules["matplotlib.font_manager"] = MagicMock()
+
 # 使用非交互式后端，跳过不必要的 GUI 初始化
 import os
 import matplotlib
+matplotlib.font_manager = MagicMock()
 matplotlib.use('Agg')
 os.environ['MPLCONFIGDIR'] = '/tmp/matplotlib_cache' # 确保有地方写缓存
 os.environ.setdefault("MPLBACKEND", "Agg")
