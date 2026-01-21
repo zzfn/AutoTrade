@@ -28,7 +28,7 @@ RUN mkdir -p $MPLCONFIGDIR && chmod -R 777 $MPLCONFIGDIR
 
 # 重点：使用 uv run 执行预热，确保环境一致
 # 并且通过环境变量告知 matplotlib 缓存位置
-RUN uv run python -c "import matplotlib.pyplot; import matplotlib.font_manager; matplotlib.font_manager._get_fontmanager()"
+RUN uv run python -c "import matplotlib.pyplot; import matplotlib.font_manager; matplotlib.font_manager._load_fontmanager()"
 
 RUN mkdir -p /app/logs /app/reports && chmod -R 777 /app/logs /app/reports
 
