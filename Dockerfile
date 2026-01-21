@@ -1,40 +1,37 @@
-# 使用 python:3.11-slim 作为基础镜像
 FROM python:3.11-slim
 
-# 设置时区为中国标准时间
 ENV TZ=Asia/Shanghai
 ENV UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 ENV PYTHONUNBUFFERED=1
+# 关键：强制指定 Matplotlib 配置和缓存路径到固定位置
+ENV MPLCONFIGDIR=/app/.matplotlib_cache
+
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
-# Install system dependencies
-# libgomp1 is required for lightgbm
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# 复制 uv 二进制文件
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
-# 设置工作目录
 WORKDIR /app
 
-# 复制依赖文件并安装依赖
+# 先安装依赖（利用缓存层）
 COPY pyproject.toml uv.lock ./
 RUN uv sync --no-install-project
 
-# 复制项目代码并安装项目
+# 复制项目
 COPY . .
-RUN uv sync
 
-# 创建必要的目录
-RUN mkdir -p /app/logs /app/reports
+# 创建固定缓存目录并赋予权限
+RUN mkdir -p $MPLCONFIGDIR && chmod -R 777 $MPLCONFIGDIR
 
-# 切换到 root 权限或确保用户有权限
-RUN mkdir -p /.cache/matplotlib && chmod -R 777 /.cache/matplotlib
-# 预热字体缓存
-RUN python -c "from matplotlib import font_manager; font_manager._get_fontmanager()"
+# 重点：使用 uv run 执行预热，确保环境一致
+# 并且通过环境变量告知 matplotlib 缓存位置
+RUN uv run python -c "import matplotlib.pyplot; import matplotlib.font_manager; matplotlib.font_manager._get_fontmanager()"
+
+RUN mkdir -p /app/logs /app/reports && chmod -R 777 /app/logs /app/reports
+
 EXPOSE 8000
 
-# 设置默认命令
-CMD ["uv", "run","main.py"]
+CMD ["uv", "run", "main.py"]
