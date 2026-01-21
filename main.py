@@ -4,8 +4,17 @@ import uvicorn
 
 
 def is_running_in_docker() -> bool:
-    """检测是否在 Docker 容器中运行"""
-    return os.path.exists("/.dockerenv")
+    """检测是否在 Docker/Kubernetes 容器中运行"""
+    # 检测 /.dockerenv 文件
+    if os.path.exists("/.dockerenv"):
+        return True
+    # 检测 Kubernetes 环境变量
+    if os.environ.get("KUBERNETES_SERVICE_HOST"):
+        return True
+    # 检测环境变量显式设置
+    if os.environ.get("AUTOTRADE_ENV", "").lower() in ("production", "docker", "kubernetes"):
+        return True
+    return False
 
 
 if __name__ == "__main__":
