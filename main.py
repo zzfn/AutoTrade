@@ -1,6 +1,12 @@
-import os
+"""
+AutoTrade 主入口点。
 
-import uvicorn
+使用 UI/Strategy 分离架构：
+- 后台线程：FastAPI + Uvicorn (UI 服务器)
+- 主线程：LumiBot 策略执行
+"""
+import os
+import sys
 
 
 def is_running_in_docker() -> bool:
@@ -18,15 +24,52 @@ def is_running_in_docker() -> bool:
 
 
 if __name__ == "__main__":
-    print("Starting AutoTrade Web Server (FastAPI + React)...")
-    reload = not is_running_in_docker()
-    if reload:
-        print("🔧 Development mode: hot reload enabled")
+    print("=" * 60)
+    print("AutoTrade - UI/Strategy 分离模式")
+    print("=" * 60)
+    
+    in_docker = is_running_in_docker()
+    if in_docker:
+        print("🐳 Docker 模式")
     else:
-        print("🐳 Docker mode: hot reload disabled")
-    uvicorn.run(
-        "autotrade.web.server:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=reload,
+        print("🔧 开发模式")
+    
+    # 导入并运行分离架构
+    from autotrade.web.server import (
+        start_server_background,
+        run_strategy_main,
+        stop_server_background,
+        logger,
     )
+    import signal
+    
+    # 设置信号处理器
+    def signal_handler(sig, frame):
+        logger.info("收到终止信号，正在清理...")
+        from autotrade.web.server import is_running
+        # 使用模块级变量
+        import autotrade.web.server as server_module
+        server_module.is_running = False
+        stop_server_background()
+        sys.exit(0)
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    # 获取配置
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "8000"))
+    
+    # 1. 启动 UI 服务器（后台线程）
+    server_thread = start_server_background(host=host, port=port)
+    logger.info(f"UI 服务器已在后台启动: http://{host}:{port}")
+    print("-" * 60)
+    
+    # 2. 在主线程运行策略（阻塞）
+    logger.info("正在主线程启动交易策略...")
+    result = run_strategy_main()
+    logger.info(f"策略运行结果: {result}")
+    
+    # 3. 清理
+    stop_server_background()
+    logger.info("所有服务已停止。")

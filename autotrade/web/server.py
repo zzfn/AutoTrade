@@ -1055,33 +1055,23 @@ def get_data_sync_status_internal() -> dict:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """管理交易策略生命周期的上下文管理器"""
-    logger.info("正在执行交易策略生命周期启动...")
-
-    async def startup_task():
-        try:
-            await asyncio.sleep(1)
-            logger.info("后台线程初始化交易策略...")
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, initialize_and_start)
-            logger.info(f"策略启动结果: {result}")
-        except Exception as e:
-            logger.error(f"后台策略启动失败: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-
-    init_task = asyncio.create_task(startup_task())
-
+    """管理 FastAPI 应用生命周期的上下文管理器。
+    
+    注意：策略不再在此处自动启动。
+    策略由 run_strategy_main() 在主线程中运行。
+    此 lifespan 仅处理清理逻辑。
+    """
+    logger.info("FastAPI 服务器启动...（仅作为 UI 显示）")
+    
     yield
-
-    logger.info("正在执行策略生命周期关闭清理...")
-    init_task.cancel()
-    try:
-        await asyncio.wait_for(asyncio.to_thread(stop_strategy), timeout=5.0)
-    except asyncio.TimeoutError:
-        logger.warning("策略清理超时，强制关闭...")
-    except Exception as e:
-        logger.error(f"清理过程中发生错误: {e}")
+    
+    logger.info("FastAPI 服务器关闭...")
+    # 如果策略仍在运行，尝试清理
+    if is_running:
+        try:
+            stop_strategy()
+        except Exception as e:
+            logger.error(f"清理策略时发生错误: {e}")
 
 
 app = FastAPI(lifespan=lifespan)
@@ -1130,13 +1120,28 @@ async def get_strategy_config():
 
 @app.post("/api/strategy/start")
 async def api_start_strategy():
-    """手动启动策略"""
-    return initialize_and_start()
+    """手动启动策略。
+    
+    注意：在 UI-Strategy 分离架构下，策略应在主线程运行。
+    此 API 仅在策略未运行时提供状态信息。
+    如需启动策略，请使用 `python autotrade/web/server.py` 直接运行。
+    """
+    if is_running:
+        return {"status": "already_running", "message": "策略已在主线程运行中"}
+    return {
+        "status": "info",
+        "message": "策略应通过 'python autotrade/web/server.py' 在主线程启动",
+    }
 
 
 @app.post("/api/strategy/stop")
 async def api_stop_strategy():
-    """手动停止策略"""
+    """手动停止策略。
+    
+    注意：此操作会设置停止标志，策略将在下一个周期结束后停止。
+    """
+    if not is_running:
+        return {"status": "not_running", "message": "策略未运行"}
     return stop_strategy()
 
 
@@ -1263,3 +1268,340 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.info("WebSocket client disconnected")
     except Exception as e:
         logger.error(f"WS Connection Error: {e}")
+
+
+# ==============================================================================
+# REGION: Background Server & Main Thread Strategy
+# ==============================================================================
+
+# 用于控制服务器关闭的事件
+_server_shutdown_event = threading.Event()
+_uvicorn_server = None
+
+
+def start_server_background(host: str = "0.0.0.0", port: int = 8000) -> threading.Thread:
+    """在后台线程中启动 FastAPI 服务器。
+    
+    Args:
+        host: 服务器监听地址
+        port: 服务器监听端口
+        
+    Returns:
+        启动服务器的线程对象
+    """
+    import uvicorn
+    
+    global _uvicorn_server
+    
+    def run_server():
+        global _uvicorn_server
+        config = uvicorn.Config(
+            app,
+            host=host,
+            port=port,
+            log_level="info",
+            # 关键：在后台线程运行时必须禁用信号处理器
+            # 否则会与主线程的信号处理冲突
+        )
+        _uvicorn_server = uvicorn.Server(config)
+        # 禁用信号处理器（只有主线程才能处理信号）
+        _uvicorn_server.install_signal_handlers = lambda: None
+        
+        logger.info(f"启动 UI 服务器: http://{host}:{port}")
+        _uvicorn_server.run()
+        logger.info("UI 服务器已停止")
+    
+    server_thread = threading.Thread(target=run_server, daemon=True, name="UIServer")
+    server_thread.start()
+    
+    # 等待服务器启动
+    import time
+    time.sleep(1)
+    
+    return server_thread
+
+
+def stop_server_background():
+    """停止后台运行的 FastAPI 服务器。"""
+    global _uvicorn_server
+    if _uvicorn_server:
+        _uvicorn_server.should_exit = True
+        logger.info("已发送服务器停止信号")
+
+
+def run_strategy_main() -> dict:
+    """在主线程中运行交易策略（阻塞调用）。
+    
+    此函数会初始化 broker、策略和 trader，然后运行策略直到完成或被中断。
+    
+    Returns:
+        策略运行结果
+    """
+    global active_strategy, trader_instance, is_running, strategy_thread, monitor_thread
+    
+    if is_running:
+        return {"status": "already_running"}
+    
+    # 1. 加载凭证
+    api_key = os.getenv("ALPACA_API_KEY")
+    secret_key = os.getenv("ALPACA_API_SECRET")
+    paper_trading = os.getenv("ALPACA_PAPER", "True").lower() == "true"
+    
+    if not api_key or not secret_key:
+        log_message(
+            "错误: 环境变量中未找到 Alpaca 凭证 (ALPACA_API_KEY, ALPACA_API_SECRET)。"
+        )
+        return {"status": "error", "message": "缺少凭证"}
+    
+    try:
+        # 2. 设置 Broker
+        broker = Alpaca(
+            {"API_KEY": api_key, "API_SECRET": secret_key, "PAPER": paper_trading}
+        )
+        
+        # 3. 从配置加载 symbols 和 interval
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        config_path = os.path.join(base_dir, "../../configs/qlib_ml_config.yaml")
+        symbols = ["SPY", "QQQ", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA"]
+        interval = "1min"
+        lookback_period = 2
+        top_k = 3
+        sleeptime = "1M"
+        
+        try:
+            if os.path.exists(config_path):
+                with open(config_path, "r") as f:
+                    config = yaml.safe_load(f)
+                    if config:
+                        if "data" in config:
+                            data_conf = config["data"]
+                            if "symbols" in data_conf:
+                                symbols = data_conf["symbols"]
+                            if "interval" in data_conf:
+                                interval = data_conf["interval"]
+                            if "lookback_period" in data_conf:
+                                lookback_period = data_conf["lookback_period"]
+                        
+                        if "strategy" in config and "ml" in config["strategy"]:
+                            ml_conf = config["strategy"]["ml"]
+                            if "top_k" in ml_conf:
+                                top_k = ml_conf["top_k"]
+                            if "sleeptime" in ml_conf:
+                                sleeptime = ml_conf["sleeptime"]
+                            if "interval" in ml_conf:
+                                interval = ml_conf["interval"]
+                        
+                        log_message(f"从配置文件加载: symbols={len(symbols)}, interval={interval}, lookback={lookback_period}d")
+            else:
+                log_message(f"配置文件未找到: {config_path}，使用默认配置。")
+        except Exception as e:
+            log_message(f"读取配置文件时出错: {e}，使用默认配置。")
+        
+        log_message(f"启动策略: symbols={symbols}")
+        
+        # 4. 创建 ML 策略
+        model_name = ml_config.get("model_name")
+        if model_name is None:
+            model_name = model_manager.get_current_model()
+            if model_name:
+                log_message(f"自动选择最优模型: {model_name}")
+            else:
+                log_message("未找到训练好的模型，将使用默认模型")
+        
+        strategy_params = {
+            "symbols": symbols,
+            "model_name": model_name,
+            "top_k": top_k,
+            "sleeptime": sleeptime,
+            "interval": interval,
+            "lookback_period": lookback_period,
+        }
+        
+        strategy = QlibMLStrategy(broker=broker, parameters=strategy_params)
+        log_message(f"使用 QlibMLStrategy，模型: {model_name or '默认'}")
+        
+        # 5. 创建 Trader 并注册
+        trader_instance = Trader()
+        trader_instance.add_strategy(strategy)
+        
+        active_strategy = strategy
+        is_running = True
+        update_status("running")
+        
+        # 6. 启动监控线程（后台）
+        def monitor_target():
+            """轮询策略状态更新。"""
+            import time
+            import pytz
+            global _market_clock_cache, _next_api_check_time
+            
+            while is_running:
+                try:
+                    if active_strategy and hasattr(active_strategy, "get_datetime"):
+                        try:
+                            # 更新投资组合
+                            try:
+                                cash = float(active_strategy.get_cash())
+                                value = float(active_strategy.portfolio_value)
+                            except Exception:
+                                cash = 0.0
+                                value = 0.0
+                            
+                            # 更新持仓
+                            positions_data = []
+                            try:
+                                all_positions = active_strategy.get_positions()
+                                for pos in all_positions:
+                                    if float(pos.quantity) == 0:
+                                        continue
+                                    
+                                    symbol = pos.asset.symbol
+                                    last_price = 0.0
+                                    try:
+                                        if hasattr(active_strategy, "get_last_price"):
+                                            last_price = float(active_strategy.get_last_price(symbol))
+                                    except:
+                                        pass
+                                    
+                                    avg_price = float(getattr(pos, "avg_fill_price", getattr(pos, "average_price", 0.0)))
+                                    upl = float(getattr(pos, "unrealized_pl", getattr(pos, "pnl", 0.0)))
+                                    uplpc = float(getattr(pos, "unrealized_plpc", getattr(pos, "pnl_percent", 0.0)))
+                                    
+                                    positions_data.append({
+                                        "symbol": symbol,
+                                        "quantity": float(pos.quantity),
+                                        "average_price": avg_price,
+                                        "current_price": last_price,
+                                        "unrealized_pl": upl,
+                                        "unrealized_plpc": uplpc,
+                                        "asset_class": getattr(pos.asset, "asset_class", "stock"),
+                                    })
+                            except Exception:
+                                pass
+                            
+                            # 获取市场状态
+                            market_status = "unknown"
+                            try:
+                                if hasattr(active_strategy.broker, "api"):
+                                    clock = active_strategy.broker.api.get_clock()
+                                    if clock.is_open:
+                                        market_status = "open"
+                                    else:
+                                        market_status = "closed"
+                            except Exception:
+                                pass
+                            
+                            # 获取预测信号
+                            signals_data = []
+                            try:
+                                if hasattr(active_strategy, "get_prediction_summary"):
+                                    summary = active_strategy.get_prediction_summary()
+                                    predictions = summary.get("predictions", {})
+                                    top_k_val = summary.get("top_k", 3)
+                                    model_loaded = summary.get("model_loaded", False)
+                                    
+                                    if predictions:
+                                        sorted_preds = sorted(
+                                            predictions.items(),
+                                            key=lambda x: x[1],
+                                            reverse=True
+                                        )
+                                        for rank, (symbol, score) in enumerate(sorted_preds, 1):
+                                            signals_data.append({
+                                                "symbol": symbol,
+                                                "score": float(score),
+                                                "rank": rank,
+                                                "is_top_k": rank <= top_k_val,
+                                            })
+                                    
+                                    state["model_loaded"] = model_loaded
+                            except Exception:
+                                pass
+                            
+                            state["signals"] = signals_data
+                            update_portfolio(cash, value, positions_data, market_status=market_status)
+                        except Exception:
+                            pass
+                except Exception as e:
+                    print(f"Monitor error: {e}")
+                time.sleep(1)
+        
+        monitor_thread = threading.Thread(target=monitor_target, daemon=True, name="StrategyMonitor")
+        monitor_thread.start()
+        
+        # 7. 在主线程运行策略（阻塞）
+        log_message("策略开始在主线程运行...")
+        try:
+            trader_instance.run_all()
+        except KeyboardInterrupt:
+            log_message("收到中断信号，正在停止策略...")
+        except Exception as e:
+            log_message(f"策略运行出错: {e}")
+        finally:
+            is_running = False
+            update_status("stopped")
+            log_message("策略已停止。")
+        
+        return {"status": "completed"}
+        
+    except Exception as e:
+        log_message(f"设置策略失败: {e}")
+        is_running = False
+        update_status("stopped")
+        return {"status": "error", "message": str(e)}
+
+
+# ==============================================================================
+# REGION: Main Entry Point
+# ==============================================================================
+
+
+if __name__ == "__main__":
+    """主入口点：UI 在后台线程，策略在主线程。
+    
+    使用方式：
+        python autotrade/web/server.py
+        
+    或使用 uv：
+        uv run python autotrade/web/server.py
+        
+    架构：
+        - Thread 1 (Background): FastAPI + Uvicorn (UI 服务器)
+        - Thread 0 (Main): LumiBot 策略执行
+        - 共享状态: state 字典作为 UI 和策略之间的桥梁
+    """
+    import signal
+    import sys
+    
+    # 设置信号处理器（仅主线程）
+    def signal_handler(sig, frame):
+        logger.info("收到终止信号，正在清理...")
+        global is_running
+        is_running = False
+        stop_server_background()
+        sys.exit(0)
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    # 1. 启动 UI 服务器（后台线程）
+    logger.info("=" * 60)
+    logger.info("AutoTrade - UI/Strategy 分离模式")
+    logger.info("=" * 60)
+    
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "8000"))
+    
+    server_thread = start_server_background(host=host, port=port)
+    
+    logger.info(f"UI 服务器已在后台启动: http://{host}:{port}")
+    logger.info("-" * 60)
+    
+    # 2. 在主线程运行策略（阻塞）
+    logger.info("正在主线程启动交易策略...")
+    result = run_strategy_main()
+    logger.info(f"策略运行结果: {result}")
+    
+    # 3. 清理
+    stop_server_background()
+    logger.info("所有服务已停止。")
