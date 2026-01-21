@@ -1,5 +1,5 @@
-# 使用 python:3.11-slim 作为基础镜像
-FROM python:3.11-slim
+# 尝试使用完整版镜像（排查 slim 缺库问题）
+FROM python:3.11-bookworm
 
 # 设置时区为中国标准时间
 ENV TZ=Asia/Shanghai
@@ -38,9 +38,18 @@ RUN uv sync --no-install-project
 COPY . .
 RUN uv sync
 
-# 治本：在构建时预生成 matplotlib 字体缓存
-# 这样运行时就不需要扫描字体了
-RUN uv run python -c "import matplotlib.font_manager; print('Matplotlib font cache generated')"
+# 治本：在构建时预热所有依赖
+# 1. matplotlib 字体缓存
+# 2. lumibot 及其所有依赖（pandas, numpy 等）
+# 这样运行时就不需要首次编译了
+RUN uv run python -c "\
+import matplotlib.font_manager; \
+print('Step 1: Matplotlib font cache generated'); \
+from lumibot.strategies import Strategy; \
+from lumibot.brokers import Alpaca; \
+from lumibot.traders import Trader; \
+print('Step 2: Lumibot dependencies preloaded'); \
+"
 
 EXPOSE 8000
 
