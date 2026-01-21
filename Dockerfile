@@ -42,14 +42,8 @@ RUN uv sync
 # 1. matplotlib 字体缓存
 # 2. lumibot 及其所有依赖（pandas, numpy 等）
 # 这样运行时就不需要首次编译了
-RUN uv run python -c "\
-import matplotlib.font_manager; \
-print('Step 1: Matplotlib font cache generated'); \
-from lumibot.strategies import Strategy; \
-from lumibot.brokers import Alpaca; \
-from lumibot.traders import Trader; \
-print('Step 2: Lumibot dependencies preloaded'); \
-"
+RUN uv run python -c "import matplotlib.font_manager; print('Matplotlib font cache generated')"
+
 
 EXPOSE 8000
 
