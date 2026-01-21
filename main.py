@@ -6,20 +6,33 @@ AutoTrade 主入口 - 最简 LumiBot 测试案例
 """
 import os
 import sys
-
-# =============================================================================
-# 加速 matplotlib 初始化（必须在其他导入之前！）
-# =============================================================================
-from unittest.mock import MagicMock
-sys.modules["matplotlib.font_manager"] = MagicMock()
-import matplotlib
-matplotlib.font_manager = MagicMock()
-matplotlib.use('Agg')
-os.environ['MPLCONFIGDIR'] = '/tmp/matplotlib_cache'
-os.environ.setdefault("MPLBACKEND", "Agg")
-
 import logging
-logging.getLogger("matplotlib.font_manager").setLevel(logging.WARNING)
+
+
+# =============================================================================
+# 日志配置
+# =============================================================================
+def setup_logging():
+    """配置日志系统"""
+    log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+    log_format = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
+    date_format = "%Y-%m-%d %H:%M:%S"
+
+    # 配置根日志记录器
+    logging.basicConfig(
+        level=getattr(logging, log_level, logging.INFO),
+        format=log_format,
+        datefmt=date_format,
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+        ],
+    )
+
+    # 设置第三方库的日志级别
+    logging.getLogger("lumibot").setLevel(logging.WARNING)
+    logging.getLogger("alpaca").setLevel(logging.WARNING)
+
+    return logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -40,10 +53,13 @@ class SimpleTestStrategy(Strategy):
 
     def initialize(self):
         self.sleeptime = self.parameters["sleeptime"]
-        self.log_message("=" * 50)
-        self.log_message("SimpleTestStrategy 启动成功！")
-        self.log_message(f"交易标的: {self.symbol}")
-        self.log_message("=" * 50)
+        self.logger = logging.getLogger(f"{__name__}.SimpleTestStrategy")
+
+        self.logger.info("=" * 50)
+        self.logger.info("SimpleTestStrategy 启动成功！")
+        self.logger.info(f"交易标的: {self.symbol}")
+        self.logger.info(f"检查频率: {self.sleeptime}")
+        self.logger.info("=" * 50)
 
     def on_trading_iteration(self):
         """每次交易迭代"""
@@ -52,17 +68,19 @@ class SimpleTestStrategy(Strategy):
             cash = self.get_cash()
             value = self.portfolio_value
 
-            self.log_message(f"[状态] {self.symbol}=${price:.2f} | 现金=${cash:.2f} | 总资产=${value:.2f}")
+            self.logger.info(
+                f"[状态] {self.symbol}=${price:.2f} | 现金=${cash:.2f} | 总资产=${value:.2f}"
+            )
         except Exception as e:
-            self.log_message(f"获取数据出错: {e}")
+            self.logger.error(f"获取数据出错: {e}", exc_info=True)
 
     def before_market_opens(self):
         """市场开盘前"""
-        self.log_message("市场即将开盘...")
+        self.logger.info("市场即将开盘...")
 
     def after_market_closes(self):
         """市场收盘后"""
-        self.log_message("市场已收盘")
+        self.logger.info("市场已收盘")
 
 
 def is_running_in_docker() -> bool:
