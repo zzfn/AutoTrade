@@ -52,11 +52,27 @@ def setup_logging():
 # =============================================================================
 # 最简单的 LumiBot 策略
 # =============================================================================
-print("[BOOT] 正在 import lumibot...", flush=True)
+
+# 细粒度追踪 import 过程
+print("[BOOT] Step 1: import matplotlib...", flush=True)
+import matplotlib
+print(f"[BOOT] Step 1 done: matplotlib {matplotlib.__version__}", flush=True)
+
+print("[BOOT] Step 2: import matplotlib.font_manager...", flush=True)
+import matplotlib.font_manager
+print("[BOOT] Step 2 done", flush=True)
+
+print("[BOOT] Step 3: import lumibot.strategies.strategy...", flush=True)
 from lumibot.strategies.strategy import Strategy
+print("[BOOT] Step 3 done", flush=True)
+
+print("[BOOT] Step 4: import lumibot.brokers...", flush=True)
 from lumibot.brokers import Alpaca
+print("[BOOT] Step 4 done", flush=True)
+
+print("[BOOT] Step 5: import lumibot.traders...", flush=True)
 from lumibot.traders import Trader
-print("[BOOT] lumibot import 完成", flush=True)
+print("[BOOT] Step 5 done: 所有 import 完成!", flush=True)
 
 
 class SimpleTestStrategy(Strategy):
