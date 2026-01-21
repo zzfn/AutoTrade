@@ -64,32 +64,34 @@ uv run uvicorn autotrade.web_server:app --reload
 
 ### 1. 初始化数据
 
-首次使用需要获取历史数据并转换为 Qlib 格式：
+首次使用需要获取历史数据并转换为 Qlib 格式。
 
+**通过 Web 界面**：
+1. 访问 http://localhost:8000/data
+2. 点击「启动数据同步」按钮
+3. 配置股票池和时间范围
+4. 等待数据下载完成
+
+**通过 API**：
 ```bash
-# 获取默认股票池的 2 年数据
-uv run python scripts/init_qlib_data.py
-
-# 或指定股票和时间范围
-uv run python scripts/init_qlib_data.py \
-  --symbols SPY,AAPL,MSFT,GOOGL \
-  --days 730
+curl -X POST http://localhost:8000/api/data/sync \
+  -H "Content-Type: application/json" \
+  -d '{"symbols": ["SPY", "AAPL", "MSFT"], "days": 730}'
 ```
 
 ### 2. 训练模型
 
+**通过 Web 界面**：
+1. 访问 http://localhost:8000/models
+2. 点击「开始训练」按钮
+3. 配置训练参数（股票、天数、预测周期等）
+4. 等待训练完成，新模型会自动保存
+
+**通过 API**：
 ```bash
-# 基础训练
-uv run python scripts/train_model.py --symbols SPY,AAPL,MSFT
-
-# 使用配置文件
-uv run python scripts/train_model.py --config configs/qlib_ml_config.yaml
-
-# Walk-Forward 验证
-uv run python scripts/train_model.py --symbols SPY --walk-forward
-
-# 训练后设置为当前模型
-uv run python scripts/train_model.py --symbols SPY,AAPL,MSFT --set-current
+curl -X POST http://localhost:8000/api/models/train \
+  -H "Content-Type: application/json" \
+  -d '{"symbols": ["SPY", "AAPL", "MSFT"], "train_days": 504}'
 ```
 
 ### 3. 通过 Web 界面管理
@@ -109,8 +111,10 @@ uv run python scripts/train_model.py --symbols SPY,AAPL,MSFT --set-current
 | `/api/models`                       | GET  | 列出所有可用模型   |
 | `/api/models/current`               | GET  | 获取当前选择的模型 |
 | `/api/models/select`                | POST | 选择要使用的模型   |
-| `/api/models/rolling_update`        | POST | 启动 Rolling 更新  |
-| `/api/models/rolling_update/status` | GET  | 获取更新状态       |
+| `/api/models/train`                 | POST | 启动模型训练       |
+| `/api/models/train/status`         | GET  | 获取训练状态       |
+| `/api/data/sync`                   | POST | 启动数据同步       |
+| `/api/data/sync/status`            | GET  | 获取同步状态       |
 
 ## 策略说明
 
@@ -146,12 +150,9 @@ autotrade/
 │   └── models/          # 模型训练
 ├── ui/                   # Web 界面
 │   └── templates/
+├── web/                  # Web 服务器
+│   └── server.py
 ├── trade_manager.py      # 交易管理器
-└── web_server.py         # Web 服务器
-
-scripts/
-├── init_qlib_data.py     # 数据初始化
-└── train_model.py        # 模型训练
 
 configs/
 ├── universe.yaml         # 股票池配置
