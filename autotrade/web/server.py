@@ -103,7 +103,7 @@ STATIC_DIR = os.path.join(UI_DIR, "static")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount(
     "/reports",
-    StaticFiles(directory=os.path.join(os.path.dirname(BASE_DIR), "logs")),
+    StaticFiles(directory=os.path.join(os.path.dirname(BASE_DIR), "reports")),
     name="reports",
 )
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
