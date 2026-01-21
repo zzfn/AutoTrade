@@ -87,7 +87,7 @@ import matplotlib.font_manager
 print("[BOOT] Step 2 done", flush=True)
 
 print("[BOOT] Step 3: import lumibot.strategies.strategy...", flush=True)
-from lumibot.strategies import Strategy
+from lumibot.strategies.strategy import Strategy
 print("[BOOT] Step 3 done", flush=True)
 
 # 关闭追踪
