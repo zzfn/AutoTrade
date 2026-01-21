@@ -52,23 +52,6 @@ def setup_logging():
 # =============================================================================
 # 最简单的 LumiBot 策略
 # =============================================================================
-print("[BOOT] 正在配置 matplotlib...", flush=True)
-
-# 关键：在 import matplotlib 之前设置环境变量，禁用字体缓存扫描
-import os
-os.environ["MPLCONFIGDIR"] = "/tmp/matplotlib"  # 使用临时目录存储配置
-os.environ["MPLBACKEND"] = "Agg"  # 使用非交互式后端
-
-# 预先配置 matplotlib，避免字体扫描卡住
-import matplotlib
-matplotlib.use("Agg")  # 强制使用 Agg 后端（无 GUI）
-
-# 禁用字体管理器的自动发现
-import matplotlib.font_manager as fm
-# 清空字体路径，跳过系统字体扫描
-fm.fontManager.addfont = lambda *args, **kwargs: None  # 禁用添加字体
-print("[BOOT] matplotlib 配置完成", flush=True)
-
 print("[BOOT] 正在 import lumibot...", flush=True)
 from lumibot.strategies.strategy import Strategy
 from lumibot.brokers import Alpaca
