@@ -24,22 +24,24 @@
 - Walk-Forward 验证成为**默认行为**
 - 参数在代码中写死（可配置的常量）
 
-### 2. 默认参数（平衡模式）
+### 2. 固定参数
 ```python
-DEFAULT_WALK_FORWARD_CONFIG = {
-    "train_window": 2000,   # 2000 根K线训练（5min数据约 18 天）
-    "test_window": 200,     # 200 根K线测试（5min数据约 1.8 天）
+# 数据量配置
+NUM_BARS = 20000  # 固定获取 20000 根K线
+
+# Walk-Forward 窗口（固定，无需动态调整）
+WALK_FORWARD_CONFIG = {
+    "train_window": 2000,   # 2000 根K线训练
+    "test_window": 200,     # 200 根K线测试
     "step_size": 200        # 200 根K线滚动
 }
+# 将进行约 (20000 - 2000) / 200 = 90 个窗口的验证
 ```
 
-### 3. 动态窗口调整
-- 根据数据点数量自动调整窗口大小
-- 确保至少能进行 2 个窗口的验证
-- 调整策略：
-  - 如果数据不足 5000 根：缩小到 `train_window=1000, test_window=100, step_size=100`
-  - 如果数据不足 2000 根：进一步缩小到 `train_window=500, test_window=50, step_size=50`
-  - 如果数据不足 1000 根：降级到单次训练（80/20）+ 警告提示
+### 3. 简化逻辑
+- **移除动态窗口调整**：固定使用上述参数
+- **数据充足检查**：如果数据不足 2500 根，给出警告但仍尝试训练
+- **统一行为**：所有训练使用相同的参数，无需配置
 
 ### 4. WalkForwardValidator 集成
 `WalkForwardValidator` 类已存在于 `autotrade/ml/trainer.py:306`，需要：

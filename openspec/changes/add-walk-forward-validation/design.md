@@ -42,32 +42,25 @@
 
 ## Data Flow
 
-### 1. 窗口参数动态调整
+### 1. 固定参数
 ```python
 # server.py: start_model_training_internal()
 
-# 默认参数（平衡模式）
-DEFAULT_WALK_FORWARD_CONFIG = {
-    "train_window": 2000,   # 2000 根K线
-    "test_window": 200,     # 200 根K线
-    "step_size": 200        # 200 根K线
-}
+# 固定参数（无需配置）
+NUM_BARS = 20000
+TRAIN_WINDOW = 2000
+TEST_WINDOW = 200
+STEP_SIZE = 200
 
-# 计算数据长度（数据点数量）
-num_data_points = len(df)
-
-# 动态调整策略
-def adjust_windows(num_data_points):
-    if num_data_points >= 5000:  # 数据充足
-        return (2000, 200, 200)  # 标准模式
-    elif num_data_points >= 2000:  # 数据较少
-        return (1000, 100, 100)  # 较小窗口
-    elif num_data_points >= 1000:  # 数据稀少
-        return (500, 50, 50)  # 最小窗口
-    else:
-        return None  # 降级到单次训练
-
-config = adjust_windows(num_data_points)
+# Walk-Forward 验证
+validator = WalkForwardValidator(
+    trainer_class=LightGBMTrainer,
+    train_window=TRAIN_WINDOW,
+    test_window=TEST_WINDOW,
+    step_size=STEP_SIZE
+)
+results = validator.validate(X, y)
+# 将进行约 90 个窗口的验证
 ```
 
 ### 2. Walk-Forward 验证流程

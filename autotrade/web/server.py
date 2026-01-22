@@ -833,7 +833,7 @@ def start_model_training_internal(config: dict = None) -> dict:
             config_path = os.path.join(base_dir, "../../configs/qlib_ml_config.yaml")
 
             yaml_interval = None
-            yaml_num_bars = 10000
+            yaml_num_bars = 20000
             yaml_target_horizon = 60
 
             if os.path.exists(config_path):
@@ -876,7 +876,7 @@ def start_model_training_internal(config: dict = None) -> dict:
                 "1d": 1
             }.get(interval, 78)
 
-            # 计算需要的时间范围（额外加 50% buffer）
+            # 计算需要的时间范围（额外加 50% buffer 确保足够数据）
             days_needed = int(num_bars / bars_per_day * 1.5) + 30
 
             adapter = QlibDataAdapter(interval=interval)
@@ -1002,7 +1002,7 @@ def start_data_sync_internal(config: dict = None) -> dict:
             config_path = os.path.join(base_dir, "../../configs/qlib_ml_config.yaml")
 
             yaml_interval = None
-            yaml_num_bars = 10000
+            yaml_num_bars = 20000
 
             if os.path.exists(config_path):
                 try:
@@ -1255,7 +1255,7 @@ async def get_data_config():
         config = {
             "symbols": ["SPY", "QQQ", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA"],
             "interval": "1min",
-            "num_bars": 10000,
+            "num_bars": 20000,
             "valid_bars": 2000,
             "lookback_period": 300
         }
