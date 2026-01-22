@@ -14,14 +14,15 @@ data:
     - NVDA
     - TSLA
 
-  # 数据频率：1min, 1h, 1d (Alpaca 只支持这三种)
-  interval: 1min
+  # 数据频率：代码中硬编码为 5 分钟 (TimeFrame(5, TimeFrameUnit.Minute))
+  # 此配置暂时不生效，因为 Lumibot 的 timestep 映射有 bug
+  interval: 5min
 
   # 数据源优先级: alpaca > yfinance
   data_dir: datasets
 
   # 历史K线数量（数据点数量）
-  num_bars: 20000  # 20000 根K线（1min ≈ 14 天，5min ≈ 70 天）
+  num_bars: 20000 # 20000 根K线（1min ≈ 14 天，5min ≈ 70 天）
   valid_bars: 2000
 
   # 策略回看周期（数据点数量）
@@ -73,7 +74,7 @@ model:
   early_stopping_rounds: 50
 
   # 目标变量
-  target_horizon: 60 # 预测未来 60 * 1min = 60 分钟收益
+  target_horizon: 12 # 预测未来 12 * 5min = 60 分钟收益
 
 # 策略配置
 strategy:
