@@ -38,12 +38,10 @@ RUN uv sync --no-install-project
 COPY . .
 RUN uv sync
 
-# 修复 polars 二进制不兼容问题：
-# 在 Apple ARM (M1/M2) 上通过 Rosetta 运行 x86-64 容器时，
-# 标准 polars 需要 AVX/AVX2 等 CPU 指令集，Rosetta 不支持
-# 使用 polars-lts-cpu 是官方推荐的兼容版本
-RUN uv pip uninstall polars -y 2>/dev/null || true && \
-    uv pip install polars-lts-cpu
+# polars 兼容性说明：
+# lumibot 依赖 polars，默认版本需要 AVX/AVX2 等现代 CPU 指令
+# 已在 pyproject.toml 中通过 [tool.uv] override-dependencies 配置
+# 使用 polars-lts-cpu 替代，无需额外处理
 
 # 治本：在构建时预热并验证所有依赖
 # 如果任何导入失败，构建会失败（而不是运行时失败）

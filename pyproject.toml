@@ -8,6 +8,15 @@ dependencies = [
     # 金融量化与交易
     "lumibot",                   # 交易机器人框架
     "alpaca-py>=0.43.2",         # Alpaca 交易所 API
+    # 覆盖 lumibot 的 polars 依赖，使用 CPU 兼容版本
+    # polars 默认版本需要 AVX/AVX2 等现代 CPU 指令，某些服务器不支持
+    "polars-lts-cpu",            # polars 的 LTS CPU 兼容版本
+]
+
+# uv 依赖覆盖：将 lumibot 依赖的 polars 替换为 polars-lts-cpu
+[tool.uv]
+override-dependencies = [
+    "polars-lts-cpu",
 ]
 
 [dependency-groups]
