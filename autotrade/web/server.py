@@ -1217,6 +1217,45 @@ async def get_data_sync_status():
     return get_data_sync_status_internal()
 
 
+@app.get("/api/data/config")
+async def get_data_config():
+    """获取数据配置（标的池、频率等）"""
+    try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        config_path = os.path.join(base_dir, "../../configs/qlib_ml_config.yaml")
+
+        # 默认配置
+        config = {
+            "symbols": ["SPY", "QQQ", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA"],
+            "interval": "1min",
+            "train_days": 30,
+            "valid_days": 7,
+            "lookback_period": 300
+        }
+
+        # 从配置文件读取
+        if os.path.exists(config_path):
+            with open(config_path, "r") as f:
+                yaml_config = yaml.safe_load(f)
+                if yaml_config and "data" in yaml_config:
+                    data_conf = yaml_config["data"]
+                    if "symbols" in data_conf:
+                        config["symbols"] = data_conf["symbols"]
+                    if "interval" in data_conf:
+                        config["interval"] = data_conf["interval"]
+                    if "train_days" in data_conf:
+                        config["train_days"] = data_conf["train_days"]
+                    if "valid_days" in data_conf:
+                        config["valid_days"] = data_conf["valid_days"]
+                    if "lookback_period" in data_conf:
+                        config["lookback_period"] = data_conf["lookback_period"]
+
+        return {"config": config}
+    except Exception as e:
+        logger.error(f"Error reading data config: {e}")
+        return {"config": None, "error": str(e)}
+
+
 # ==================== 模型管理页面 ====================
 
 
