@@ -15,10 +15,9 @@
                      │
 ┌────────────────────▼────────────────────────────────────┐
 │              server.py: start_model_training_internal()   │
-│  - 计算数据长度                                           │
-│  - 动态调整窗口参数                                       │
+│  - 检查数据长度是否满足最小要求                            │
 │  - 分支:                                                 │
-│    * 数据充足 → Walk-Forward 验证                         │
+│    * 数据充足 → Walk-Forward 验证（固定参数）              │
 │    * 数据不足 → 单次训练 + 警告                           │
 └────────────────────┬────────────────────────────────────┘
                      │
@@ -27,10 +26,11 @@
         ▼                         ▼
 ┌──────────────┐      ┌─────────────────────┐
 │ 单次训练      │      │ WalkForwardValidator│
-│ (降级逻辑)    │      │  - 循环滚动窗口      │
-│ + 警告提示    │      │  - 训练 + 验证       │
-│              │      │  - 收集指标          │
-└──────────────┘      └─────────────────────┘
+│ (降级逻辑)    │      │  - 固定窗口参数      │
+│ + 警告提示    │      │  - 循环滚动窗口      │
+│              │      │  - 训练 + 验证       │
+└──────────────┘      │  - 收集指标          │
+                      └─────────────────────┘
                                │
                                ▼
                       ┌────────────────┐
@@ -42,38 +42,47 @@
 
 ## Data Flow
 
-### 1. 固定参数
+### 1. 固定参数配置
 ```python
 # server.py: start_model_training_internal()
 
-# 固定参数（无需配置）
-NUM_BARS = 20000
-TRAIN_WINDOW = 2000
-TEST_WINDOW = 200
-STEP_SIZE = 200
+# Walk-Forward 窗口配置（固定，单位：根K线数量）
+WALK_FORWARD_CONFIG = {
+    "train_window": 2000,   # 训练窗口：2000 根K线
+    "test_window": 200,     # 测试窗口：200 根K线
+    "step_size": 200,       # 滚动步长：200 根K线
+}
 
-# Walk-Forward 验证
-validator = WalkForwardValidator(
-    trainer_class=LightGBMTrainer,
-    train_window=TRAIN_WINDOW,
-    test_window=TEST_WINDOW,
-    step_size=STEP_SIZE
-)
-results = validator.validate(X, y)
-# 将进行约 90 个窗口的验证
+MIN_BARS_REQUIRED = 2500   # 最小数据要求
+
+# 用户通过 num_bars 控制总数据量
+num_bars = 20000  # 用户配置的K线数量
+
+# 数据充足性检查
+if len(X) >= MIN_BARS_REQUIRED:
+    # Walk-Forward 验证
+    validator = WalkForwardValidator(
+        trainer_class=LightGBMTrainer,
+        train_window=WALK_FORWARD_CONFIG["train_window"],
+        test_window=WALK_FORWARD_CONFIG["test_window"],
+        step_size=WALK_FORWARD_CONFIG["step_size"]
+    )
+    results = validator.validate(X, y)
+    # 约进行 (num_bars - 2000) / 200 = 90 个窗口的验证
+else:
+    # 降级到单次训练
+    log_warning(f"数据不足 {MIN_BARS_REQUIRED} 根K线，降级到单次训练")
+    # ...
 ```
 
 ### 2. Walk-Forward 验证流程
 ```python
-if config is not None:
-    train_window, test_window, step_size = config
-
-    # 执行验证
+# 数据充足性检查
+if len(X) >= MIN_BARS_REQUIRED:
+    # 执行 Walk-Forward 验证
     validator = WalkForwardValidator(
         trainer_class=LightGBMTrainer,
-        train_window=train_window,
-        test_window=test_window,
-        step_size=step_size
+        **WALK_FORWARD_CONFIG
     )
     results = validator.validate(X, y)
 
@@ -86,8 +95,8 @@ if config is not None:
     }
 else:
     # 降级到单次训练
-    log_message("数据不足，降级到单次训练")
-    # 执行现有逻辑...
+    log_warning(f"数据不足 {MIN_BARS_REQUIRED} 根K线")
+    # 执行现有 80/20 分割逻辑...
 ```
 
 ### 3. 进度更新
@@ -104,14 +113,14 @@ for i, window_result in enumerate(results):
 ### 训练配置展示
 ```
 ┌─────────────────────────────────────────┐
-│ 训练配置（来自 qlib_ml_config.yaml）    │
+│ 训练配置                                 │
 ├─────────────────────────────────────────┤
-│ 数据频率：5min                          │
-│ 训练天数：30                            │
-│ Walk-Forward 验证：✓ 自动启用           │
-│   - 训练窗口：180 天                    │
-│   - 测试窗口：15 天                     │
-│   - 滚动步长：15 天                     │
+│ 数据数量：20000 根K线                    │
+│ Walk-Forward 验证：✓ 启用                │
+│   - 训练窗口：2000 根K线                 │
+│   - 测试窗口：200 根K线                  │
+│   - 滚动步长：200 根K线                  │
+│   - 预计窗口数：90 个                    │
 └─────────────────────────────────────────┘
 ```
 
@@ -120,11 +129,13 @@ for i, window_result in enumerate(results):
 ┌─────────────────────────────────────────┐
 │ ⚠️  数据量警告                          │
 ├─────────────────────────────────────────┤
-│ 当前数据长度：67 天                      │
+│ 当前数据长度：1200 根K线                 │
 │                                          │
-│ Walk-Forward 验证需要至少 60 天数据。    │
-│ 建议增加历史数据到 120 天以上以获得更    │
-│ 稳健的模型评估。                         │
+│ Walk-Forward 验证需要至少 2500 根K线。   │
+│ 将降级到单次训练（80% 训练 + 20% 验证）。 │
+│                                          │
+│ 建议增加 num_bars 到 5000+ 以获得更稳健  │
+│ 的模型评估（推荐 20000 根K线）。          │
 │                                          │
 │ [继续训练] [取消]                        │
 └─────────────────────────────────────────┘

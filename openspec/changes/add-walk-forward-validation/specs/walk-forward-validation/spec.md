@@ -11,32 +11,32 @@
 系统 SHALL 将 Walk-Forward 验证作为所有模型训练的默认方法：
 
 - 无需配置文件控制，始终使用 Walk-Forward 验证
-- 使用固定默认参数：`train_window=180`, `test_window=15`, `step_size=15`
-- 根据数据长度动态调整窗口大小，确保验证能进行
+- 使用固定窗口参数（单位：根K线数量）：`train_window=2000`, `test_window=200`, `step_size=200`
+- 最小数据要求：`2500` 根K线
 - 数据不足时降级到单次训练并给出警告
 
 #### Scenario: 标准训练（数据充足）
 
-- **GIVEN** 训练数据有 10 个月以上历史
+- **GIVEN** 用户配置 `num_bars=20000`（或更多）
 - **WHEN** 用户启动模型训练
-- **THEN** 系统使用默认窗口参数（180/15/15）执行 Walk-Forward 验证
-- **AND** 在多个时间窗口上训练和验证模型
+- **THEN** 系统使用固定窗口参数（2000/200/200）执行 Walk-Forward 验证
+- **AND** 在约 90 个时间窗口上训练和验证模型
 - **AND** 计算聚合指标（IC mean ± std, ICIR mean）
 
-#### Scenario: 动态窗口调整（数据较少）
+#### Scenario: 较小数据集训练
 
-- **GIVEN** 训练数据只有 4 个月历史
+- **GIVEN** 用户配置 `num_bars=5000`
 - **WHEN** 用户启动模型训练
-- **THEN** 系统自动缩小窗口参数（60/7/7）以适应数据长度
-- **AND** 执行 Walk-Forward 验证
-- **AND** 显示警告："数据量较少，建议增加历史数据以获得更稳健的模型"
+- **THEN** 系统使用相同的固定窗口参数执行 Walk-Forward 验证
+- **AND** 在约 15 个时间窗口上训练和验证模型
+- **AND** 正常计算聚合指标
 
 #### Scenario: 数据不足降级
 
-- **GIVEN** 训练数据不足 2 个月
+- **GIVEN** 训练数据不足 2500 根K线
 - **WHEN** 用户启动模型训练
 - **THEN** 系统降级到单次训练（80% 训练 + 20% 验证）
-- **AND** 显示警告："数据严重不足，Walk-Forward 验证已禁用。建议至少提供 4 个月历史数据"
+- **AND** 显示警告："数据严重不足，Walk-Forward 验证已禁用。建议至少提供 5000 根K线（推荐 20000）"
 
 ---
 
@@ -45,15 +45,16 @@
 系统 SHALL 提供完整的 Walk-Forward 验证执行流程：
 
 - 调用 `WalkForwardValidator.validate()` 执行验证
-- 支持滚动窗口训练（训练窗口 + 测试窗口）
+- 使用固定窗口参数（2000 根K线训练 + 200 根K线测试）
+- 每次滚动 200 根K线
 - 收集每个窗口的评估指标
 - 计算聚合统计量（均值、标准差）
 
 #### Scenario: 验证执行
 
-- **GIVEN** 启用 Walk-Forward 验证
+- **GIVEN** 数据充足（≥ 2500 根K线）
 - **WHEN** 验证开始
-- **THEN** 系统按照配置的窗口大小滚动训练
+- **THEN** 系统按照固定窗口参数滚动训练
 - **AND** 每个窗口使用历史数据训练，在未来数据上验证
 - **AND** 记录每个窗口的 IC、ICIR 等指标
 
@@ -71,7 +72,7 @@
 
 系统 SHALL 在前端展示 Walk-Forward 验证的实时进度：
 
-- 显示当前验证窗口编号（如：窗口 3/10）
+- 显示当前验证窗口编号（如：窗口 3/90）
 - 显示当前窗口的评估指标
 - 显示已完成窗口的累计平均指标
 - 更新总体进度百分比
@@ -99,7 +100,7 @@
 系统 SHALL 在模型元数据中记录 Walk-Forward 验证结果：
 
 - 保存聚合指标（IC mean, IC std, ICIR mean）
-- 记录验证配置（窗口数、train_window, test_window）
+- 记录验证配置（窗口数、train_window, test_window, step_size）
 - 支持在模型列表中显示稳健性指标
 
 #### Scenario: 元数据保存
@@ -108,7 +109,7 @@
 - **WHEN** 保存模型元数据
 - **THEN** 元数据包含 `walk_forward` 字段
 - **AND** 记录 `ic_mean`, `ic_std`, `icir_mean`
-- **AND** 记录 `num_windows`, `train_window`, `test_window`
+- **AND** 记录 `num_windows`, `train_window`, `test_window`, `step_size`
 
 #### Scenario: 模型列表展示
 
@@ -128,19 +129,19 @@ The system SHALL provide a unified interface for training ML models, capable of 
 
 **AFTER**:
 The system SHALL provide a unified interface for training ML models，使用 Walk-Forward 验证作为默认方法：
-- 数据充足时使用 Walk-Forward 滚动窗口验证
+- 数据充足（≥ 2500 根K线）时使用 Walk-Forward 滚动窗口验证
 - 数据不足时自动降级到单次训练（80/20）
-- 动态调整窗口大小以适应数据长度
+- 使用固定窗口参数：train_window=2000, test_window=200, step_size=200
 
 #### Scenario: User initiates training (extended)
 
 - **WHEN** user clicks "Train Model" in the UI
-- **AND** training data is sufficient (4+ months)
-- **THEN** system performs Walk-Forward validation with appropriate window size
+- **AND** training data is sufficient (>= 2500 bars)
+- **THEN** system performs Walk-Forward validation with fixed parameters
 - **AND** saves aggregated results as new model version
 
 - **WHEN** user clicks "Train Model" in the UI
-- **AND** training data is insufficient (< 2 months)
+- **AND** training data is insufficient (< 2500 bars)
 - **THEN** system performs single training split (80/20)
 - **AND** shows warning about data insufficiency
 - **AND** saves result as new model version
@@ -160,5 +161,5 @@ The system SHALL provide a unified interface for training ML models，使用 Wal
 
 - **Related Spec**: `qlib-ml-strategy` - 扩展模型训练功能
 - **Related Spec**: `model-management` - 模型元数据存储
-- **Uses**: `WalkForwardValidator` class (already exists in `autotrade/ml/trainer.py`)
-- **Config**: 无需配置文件，使用代码常量 `DEFAULT_WALK_FORWARD_CONFIG`
+- **Uses**: `WalkForwardValidator` class (已存在于 `autotrade/ml/trainer.py:306`)
+- **Config**: 无需配置文件，使用代码常量 `WALK_FORWARD_CONFIG`

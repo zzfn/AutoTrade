@@ -19,39 +19,42 @@
 
 ## Proposed Solution
 
-### 1. 移除配置文件依赖
-- 从 `qlib_ml_config.yaml` 中移除 `validation` 配置段
-- Walk-Forward 验证成为**默认行为**
-- 参数在代码中写死（可配置的常量）
+### 1. 固定参数设计
 
-### 2. 固定参数
+Walk-Forward 验证使用固定窗口参数（单位：**根K线数量**）：
+
 ```python
-# 数据量配置
-NUM_BARS = 20000  # 固定获取 20000 根K线
-
-# Walk-Forward 窗口（固定，无需动态调整）
+# Walk-Forward 窗口配置（固定）
 WALK_FORWARD_CONFIG = {
-    "train_window": 2000,   # 2000 根K线训练
-    "test_window": 200,     # 200 根K线测试
-    "step_size": 200        # 200 根K线滚动
+    "train_window": 2000,   # 训练窗口：2000 根K线
+    "test_window": 200,     # 测试窗口：200 根K线
+    "step_size": 200,       # 滚动步长：200 根K线
 }
-# 将进行约 (20000 - 2000) / 200 = 90 个窗口的验证
+
+# 最小数据要求
+MIN_BARS_REQUIRED = 2500   # train_window + test_window
 ```
 
-### 3. 简化逻辑
-- **移除动态窗口调整**：固定使用上述参数
-- **数据充足检查**：如果数据不足 2500 根，给出警告但仍尝试训练
-- **统一行为**：所有训练使用相同的参数，无需配置
+**用户配置**：通过 `num_bars` 参数控制获取的总数据量（如 20000 根K线）。
 
-### 4. WalkForwardValidator 集成
+**验证窗口数**：`(num_bars - train_window) / step_size ≈ 90 个窗口`
+
+### 2. 简化逻辑
+
+- **无需配置文件**：Walk-Forward 验证成为默认行为
+- **固定参数**：所有训练使用相同的窗口参数
+- **数据充足检查**：
+  - 数据不足 `MIN_BARS_REQUIRED` → 显示警告但仍尝试训练
+  - 数据充足 → 正常执行 Walk-Forward 验证
+
+### 3. WalkForwardValidator 集成
+
 `WalkForwardValidator` 类已存在于 `autotrade/ml/trainer.py:306`，需要：
 - 修改 `start_model_training_internal` 直接调用 Walk-Forward 验证
-- 实现动态窗口调整逻辑
 - 收集所有窗口的结果并计算聚合指标
 
-### 4. 前端展示增强
 在模型训练页面显示：
-- Walk-Forward 验证进度（每个窗口）
+- Walk-Forward 验证进度（当前窗口 X/总计 Y）
 - 聚合指标：IC (mean ± std), ICIR (mean ± std)
 - 每个窗口的详细结果（可展开查看）
 
