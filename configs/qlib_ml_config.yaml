@@ -98,10 +98,3 @@ validation:
   test_window: 21 # 约 1 个月
   step_size: 21
 
-# Rolling 更新配置
-rolling_update:
-  # 默认训练配置
-  interval: 1min
-  train_days: 30
-  target_horizon: 60
-  lookback_period: 2

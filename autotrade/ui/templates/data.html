@@ -6,9 +6,27 @@
   const DataPage = () => {
     const [dataStatus, setDataStatus] = React.useState(null);
     const [loading, setLoading] = React.useState(true);
-    const [syncDays, setSyncDays] = React.useState(730);
-    const [syncInterval, setSyncInterval] = React.useState("1d");
-    const [symbols, setSymbols] = React.useState("");
+    const [dataConfig, setDataConfig] = React.useState({
+      symbols: [],
+      interval: "1d",
+      train_days: 30
+    });
+
+    // 加载数据配置（标的池和频率）
+    React.useEffect(() => {
+      const loadDataConfig = async () => {
+        try {
+          const res = await fetch("/api/data/config");
+          const data = await res.json();
+          if (data.config) {
+            setDataConfig(data.config);
+          }
+        } catch (e) {
+          console.error("加载数据配置失败:", e);
+        }
+      };
+      loadDataConfig();
+    }, []);
 
     // 加载数据状态
     const loadDataStatus = async () => {
@@ -32,15 +50,11 @@
     // 启动数据同步
     const handleDataSync = async () => {
       try {
-        const symbolList = symbols.split(",").map(s => s.trim().toUpperCase()).filter(s => s);
         await fetch("/api/data/sync", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            symbols: symbolList,
-            days: syncDays,
-            interval: syncInterval,
-            update_mode: "append"
+            // 不传参数，使用配置文件中的默认值
           }),
         });
         loadDataStatus();
@@ -75,46 +89,30 @@
           {/* 同步配置 */}
           <Card title="同步配置" className="col-span-1 md:col-span-1">
             <div className="space-y-6">
-              <div>
-                <label className="block text-xs text-slate-500 mb-2 font-bold uppercase tracking-wider">
-                  同步标的 (支持通配符或逗号分隔)
-                </label>
-                <textarea
-                  className="w-full h-32 bg-slate-900/50 border border-slate-700/50 rounded-xl px-4 py-3 text-sm text-slate-200 outline-none focus:border-cyan-500/50 transition-all font-mono"
-                  value={symbols}
-                  onChange={(e) => setSymbols(e.target.value)}
-                  placeholder=""
-                />
-                <p className="mt-2 text-[10px] text-slate-500 italic">
-                  提示: Qlib 使用 .SH/.SZ 后缀。输入 "ALL" 或空将取决于后端配置。
-                </p>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs text-slate-500 mb-2 font-bold uppercase tracking-wider">
-                    频率
-                  </label>
-                  <select
-                    value={syncInterval}
-                    onChange={(e) => setSyncInterval(e.target.value)}
-                    className="w-full bg-slate-900/50 border border-slate-700/50 rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-cyan-500/50 transition-all"
-                  >
-                    <option value="1d">日线 (Daily)</option>
-                    <option value="1h">1小时线 (Hourly)</option>
-                    <option value="5m">5分钟线 (5-Min)</option>
-                  </select>
+              {/* 配置信息显示 */}
+              <div className="p-4 bg-cyan-500/5 rounded-xl border border-cyan-500/20 space-y-3">
+                <div className="text-xs text-slate-500 font-bold uppercase tracking-wider">
+                  同步配置（来自 qlib_ml_config.yaml）
+                </div>
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <span className="text-slate-500">数据频率：</span>
+                    <span className="text-cyan-300 font-mono ml-1">{dataConfig.interval}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">训练天数：</span>
+                    <span className="text-cyan-300 font-mono ml-1">{dataConfig.train_days}</span>
+                  </div>
                 </div>
                 <div>
-                  <label className="block text-xs text-slate-500 mb-2 font-bold uppercase tracking-wider">
-                    同步天数
-                  </label>
-                  <input
-                    type="number"
-                    value={syncDays}
-                    onChange={(e) => setSyncDays(parseInt(e.target.value))}
-                    className="w-full bg-slate-900/50 border border-slate-700/50 rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-cyan-500/50"
-                  />
+                  <span className="text-slate-500 text-xs">标的池 ({dataConfig.symbols.length} 个)：</span>
+                  <div className="text-xs text-cyan-300 font-mono mt-1 flex flex-wrap gap-1">
+                    {dataConfig.symbols.map((s, i) => (
+                      <span key={i} className="px-1.5 py-0.5 bg-cyan-500/10 rounded">
+                        {s}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               </div>
 
