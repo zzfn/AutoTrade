@@ -3,9 +3,7 @@
 {% endblock %} {% block scripts %} {% raw %}
 <script type="text/babel">
   const Dashboard = () => {
-    const { data, status: connectionStatus } = useWebSocket(
-      `ws://${window.location.host}/ws`,
-    );
+    const { data, status: connectionStatus } = useWebSocket(getWsUrl());
 
     if (!data)
       return (

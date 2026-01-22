@@ -1,5 +1,11 @@
 const { useState, useEffect, useRef } = React;
 
+// 根据 HTTP/HTTPS 协议返回对应的 WebSocket 协议
+const getWsProtocol = () => window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+
+// 获取 WebSocket URL
+const getWsUrl = (path = '/ws') => `${getWsProtocol()}//${window.location.host}${path}`;
+
 const Card = ({ children, title, className = "" }) => (
   <div
     className={`glass rounded-2xl p-6 transition-all duration-300 ${className}`}

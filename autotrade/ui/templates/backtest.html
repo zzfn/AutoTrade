@@ -16,7 +16,7 @@
     const [loading, setLoading] = useState(false);
 
     // We reuse the main WS for logs for now
-    const { data } = useWebSocket(`ws://${window.location.host}/ws`);
+    const { data } = useWebSocket(getWsUrl());
 
     useEffect(() => {
       const fetchModels = async () => {
