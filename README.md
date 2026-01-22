@@ -67,12 +67,14 @@ uv run uvicorn autotrade.web_server:app --reload
 首次使用需要获取历史数据并转换为 Qlib 格式。
 
 **通过 Web 界面**：
+
 1. 访问 http://localhost:8000/data
 2. 点击「启动数据同步」按钮
 3. 配置股票池和时间范围
 4. 等待数据下载完成
 
 **通过 API**：
+
 ```bash
 curl -X POST http://localhost:8000/api/data/sync \
   -H "Content-Type: application/json" \
@@ -82,12 +84,14 @@ curl -X POST http://localhost:8000/api/data/sync \
 ### 2. 训练模型
 
 **通过 Web 界面**：
+
 1. 访问 http://localhost:8000/models
 2. 点击「开始训练」按钮
 3. 配置训练参数（股票、天数、预测周期等）
 4. 等待训练完成，新模型会自动保存
 
 **通过 API**：
+
 ```bash
 curl -X POST http://localhost:8000/api/models/train \
   -H "Content-Type: application/json" \
@@ -104,17 +108,17 @@ curl -X POST http://localhost:8000/api/models/train \
 
 ### 4. API 端点
 
-| 端点                                | 方法 | 说明               |
-| ----------------------------------- | ---- | ------------------ |
-| `/api/strategy/config`              | GET  | 获取当前策略配置   |
-| `/api/strategy/ml_config`           | POST | 设置 ML 策略参数   |
-| `/api/models`                       | GET  | 列出所有可用模型   |
-| `/api/models/current`               | GET  | 获取当前选择的模型 |
-| `/api/models/select`                | POST | 选择要使用的模型   |
-| `/api/models/train`                 | POST | 启动模型训练       |
-| `/api/models/train/status`         | GET  | 获取训练状态       |
-| `/api/data/sync`                   | POST | 启动数据同步       |
-| `/api/data/sync/status`            | GET  | 获取同步状态       |
+| 端点                       | 方法 | 说明               |
+| -------------------------- | ---- | ------------------ |
+| `/api/strategy/config`     | GET  | 获取当前策略配置   |
+| `/api/strategy/ml_config`  | POST | 设置 ML 策略参数   |
+| `/api/models`              | GET  | 列出所有可用模型   |
+| `/api/models/current`      | GET  | 获取当前选择的模型 |
+| `/api/models/select`       | POST | 选择要使用的模型   |
+| `/api/models/train`        | POST | 启动模型训练       |
+| `/api/models/train/status` | GET  | 获取训练状态       |
+| `/api/data/sync`           | POST | 启动数据同步       |
+| `/api/data/sync/status`    | GET  | 获取同步状态       |
 
 ## 策略说明
 
@@ -126,6 +130,39 @@ curl -X POST http://localhost:8000/api/models/train \
 - Top-K 排名选股（选择预测分数最高的 K 只股票）
 - 定期再平衡
 - 支持前端配置和模型热切换
+
+#### Walk-Forward 验证
+
+模型训练默认启用 **Walk-Forward 验证**（滚动窗口验证），这是一种更符合实盘交易场景的验证方法：
+
+- ✅ **模拟实盘**：每次只用历史数据预测未来，符合真实交易场景
+- ✅ **多周期测试**：在多个时间窗口验证，避免偶然性
+- ✅ **稳健性评估**：提供指标的均值和标准差（如 `IC: 0.041 ± 0.008`）
+
+**固定参数配置**（单位：根K线）：
+
+| 参数              | 值   | 说明         |
+| ----------------- | ---- | ------------ |
+| train_window      | 2000 | 训练窗口大小 |
+| test_window       | 200  | 测试窗口大小 |
+| step_size         | 200  | 滚动步长     |
+| MIN_BARS_REQUIRED | 2500 | 最小数据要求 |
+
+**数据量建议**：
+
+- **最小要求**：2500 根K线（至少进行 2 个窗口的验证）
+- **推荐数据量**：20000 根K线（约 90 个验证窗口，更稳健的评估）
+- **数据不足时**：自动降级到单次训练（80/20 分割），界面会显示警告
+
+**验证结果展示**：
+
+模型训练完成后，界面会显示聚合指标：
+
+- `IC: mean ± std`（信息系数均值和标准差）
+- `ICIR: mean ± std`（信息系数比率）
+- 验证窗口数和失败窗口数
+
+模型列表中会显示 `WF✓` 标识，表示该模型通过了 Walk-Forward 验证。
 
 #### 特征工程
 

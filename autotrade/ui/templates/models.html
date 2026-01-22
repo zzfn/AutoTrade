@@ -211,8 +211,8 @@
                   <span className="text-purple-300 font-mono ml-1">{dataConfig.interval}</span>
                 </div>
                 <div>
-                  <span className="text-slate-500">训练天数：</span>
-                  <span className="text-purple-300 font-mono ml-1">{dataConfig.train_days}</span>
+                  <span className="text-slate-500">K线数量：</span>
+                  <span className="text-purple-300 font-mono ml-1">{dataConfig.num_bars || 20000}</span>
                 </div>
               </div>
               <div>
@@ -224,6 +224,42 @@
                     </span>
                   ))}
                 </div>
+              </div>
+            </div>
+
+            {/* Walk-Forward 验证配置 */}
+            <div className="p-4 bg-cyan-500/5 rounded-xl border border-cyan-500/20 space-y-3">
+              <div className="flex items-center gap-2">
+                <div className="text-xs text-slate-500 font-bold uppercase tracking-wider">
+                  Walk-Forward 验证
+                </div>
+                <span className="px-1.5 py-0.5 text-xs bg-cyan-500/20 text-cyan-300 rounded font-medium">
+                  自动启用
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-3 text-xs">
+                <div>
+                  <span className="text-slate-500">训练窗口：</span>
+                  <span className="text-cyan-300 font-mono">2000</span>
+                </div>
+                <div>
+                  <span className="text-slate-500">测试窗口：</span>
+                  <span className="text-cyan-300 font-mono">200</span>
+                </div>
+                <div>
+                  <span className="text-slate-500">滚动步长：</span>
+                  <span className="text-cyan-300 font-mono">200</span>
+                </div>
+              </div>
+              <div className="text-xs text-slate-500">
+                预计窗口数：<span className="text-cyan-300 font-mono">
+                  {Math.max(1, Math.floor((Math.max(0, (dataConfig.num_bars || 20000) - 2000 - 200) / 200) + 1))}
+                </span> 个
+                {(dataConfig.num_bars || 20000) < 2500 && (
+                  <span className="ml-2 text-amber-400">
+                    ⚠️ 数据不足，将降级到单次训练
+                  </span>
+                )}
               </div>
             </div>
 
@@ -245,13 +281,90 @@
                   <div className="w-1.5 h-1.5 bg-purple-500 rounded-full animate-ping"></div>
                   {trainingStatus.message}
                 </div>
+
+                {/* Walk-Forward 验证进度详情 */}
+                {trainingStatus.walk_forward_progress && trainingStatus.walk_forward_progress.total_windows > 0 && (
+                  <div className="mt-3 p-3 bg-cyan-500/5 rounded-lg border border-cyan-500/20 space-y-3">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-cyan-400 font-medium">
+                        🔄 Walk-Forward 验证
+                      </span>
+                      <span className="text-cyan-300 font-mono">
+                        窗口 {trainingStatus.walk_forward_progress.current_window}/{trainingStatus.walk_forward_progress.total_windows}
+                      </span>
+                    </div>
+
+                    {/* 累计平均 */}
+                    {trainingStatus.walk_forward_progress.aggregated && (
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div className="bg-slate-800/50 rounded p-2">
+                          <div className="text-slate-500 mb-0.5">累计 IC</div>
+                          <div className="text-emerald-400 font-mono font-medium">
+                            {trainingStatus.walk_forward_progress.aggregated.ic_mean?.toFixed(4) || '0.0000'}
+                            <span className="text-slate-500 ml-1">
+                              ± {trainingStatus.walk_forward_progress.aggregated.ic_std?.toFixed(4) || '0.0000'}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="bg-slate-800/50 rounded p-2">
+                          <div className="text-slate-500 mb-0.5">累计 ICIR</div>
+                          <div className="text-purple-400 font-mono font-medium">
+                            {trainingStatus.walk_forward_progress.aggregated.icir_mean?.toFixed(2) || '0.00'}
+                            <span className="text-slate-500 ml-1">
+                              ± {trainingStatus.walk_forward_progress.aggregated.icir_std?.toFixed(2) || '0.00'}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* 数据不足降级提示 */}
+                {trainingStatus.walk_forward_progress && trainingStatus.walk_forward_progress.fallback && (
+                  <div className="mt-2 p-2 bg-amber-500/10 rounded border border-amber-500/20 text-xs text-amber-400">
+                    ⚠️ {trainingStatus.walk_forward_progress.reason}
+                  </div>
+                )}
               </div>
             ) : (
               <div className="space-y-6">
+                {/* 上次训练结果展示 (Walk-Forward 完成结果) */}
                 {trainingStatus?.message && !trainingStatus.message.includes("开始模型训练") && (
                    <div className={`p-3 rounded-lg text-xs border ${trainingStatus.message.includes("错误") ? "bg-rose-500/10 border-rose-500/20 text-rose-400" : "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"}`}>
                      {trainingStatus.message}
                    </div>
+                )}
+
+                {/* Walk-Forward 完成结果详情 */}
+                {trainingStatus?.walk_forward_progress?.aggregated && !trainingStatus.in_progress && (
+                  <div className="p-3 bg-cyan-500/5 rounded-lg border border-cyan-500/20 space-y-2">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-cyan-400 font-medium">✓ Walk-Forward 验证完成</span>
+                      <span className="text-slate-500">
+                        {trainingStatus.walk_forward_progress.aggregated.num_windows || 0} 个窗口
+                        {trainingStatus.walk_forward_progress.aggregated.failed_windows > 0 && (
+                          <span className="text-amber-400 ml-1">
+                            ({trainingStatus.walk_forward_progress.aggregated.failed_windows} 失败)
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <span className="text-slate-500">IC：</span>
+                        <span className="text-emerald-400 font-mono">
+                          {trainingStatus.walk_forward_progress.aggregated.ic_mean?.toFixed(4)} ± {trainingStatus.walk_forward_progress.aggregated.ic_std?.toFixed(4)}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">ICIR：</span>
+                        <span className="text-purple-400 font-mono">
+                          {trainingStatus.walk_forward_progress.aggregated.icir_mean?.toFixed(2)} ± {trainingStatus.walk_forward_progress.aggregated.icir_std?.toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
                 )}
 
                 <button
@@ -295,6 +408,11 @@
                     {model.is_current && (
                       <span className="px-2 py-0.5 text-xs font-medium bg-cyan-500/20 text-cyan-300 rounded">
                         当前
+                      </span>
+                    )}
+                    {model.metadata?.walk_forward_validation?.enabled && (
+                      <span className="px-2 py-0.5 text-xs font-medium bg-emerald-500/20 text-emerald-300 rounded" title="已通过 Walk-Forward 验证">
+                        WF✓
                       </span>
                     )}
                     {!model.is_current && (

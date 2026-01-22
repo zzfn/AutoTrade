@@ -94,6 +94,13 @@ class ModelManager:
                 },
                 "file_size_mb": stat.st_size / (1024 * 1024),
                 "is_current": model_dir.name == self._current_model,
+                # 添加 metadata 字段以传递 walk_forward_validation 等元数据
+                "metadata": {
+                    "walk_forward_validation": metadata.get("walk_forward_validation"),
+                    "symbols": metadata.get("symbols"),
+                    "interval": metadata.get("interval"),
+                    "num_bars": metadata.get("num_bars"),
+                },
             }
 
             models.append(model_info)

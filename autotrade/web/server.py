@@ -79,11 +79,23 @@ ml_config: dict[str, Any] = {
 # Model manager instance
 model_manager = ModelManager()
 
+# Walk-Forward 验证配置（固定，单位：根K线数量）
+WALK_FORWARD_CONFIG = {
+    "train_window": 2000,   # 训练窗口：2000 根K线
+    "test_window": 200,     # 测试窗口：200 根K线
+    "step_size": 200,       # 滚动步长：200 根K线
+}
+
+# 最小数据要求（train_window + test_window + buffer）
+MIN_BARS_REQUIRED = 2500
+
 # 模型训练状态
 training_status = {
     "in_progress": False,
     "progress": 0,
     "message": "",
+    # Walk-Forward 验证进度（可选）
+    "walk_forward_progress": None,  # { current_window, total_windows, window_results, aggregated }
 }
 
 # 数据同步状态
@@ -833,7 +845,6 @@ def start_model_training_internal(config: dict = None) -> dict:
             config_path = os.path.join(base_dir, "../../configs/qlib_ml_config.yaml")
 
             yaml_interval = None
-            yaml_num_bars = 20000
             yaml_target_horizon = 60
 
             if os.path.exists(config_path):
@@ -844,15 +855,11 @@ def start_model_training_internal(config: dict = None) -> dict:
                             if "data" in yaml_config:
                                 if "interval" in yaml_config["data"]:
                                     yaml_interval = yaml_config["data"]["interval"]
-                                if "num_bars" in yaml_config["data"]:
-                                    yaml_num_bars = yaml_config["data"]["num_bars"]
                             if "model" in yaml_config and "target_horizon" in yaml_config["model"]:
                                 yaml_target_horizon = yaml_config["model"]["target_horizon"]
                             if "rolling_update" in yaml_config:
                                 if "interval" in yaml_config["rolling_update"]:
                                     yaml_interval = yaml_config["rolling_update"].get("interval", yaml_interval)
-                                if "num_bars" in yaml_config["rolling_update"]:
-                                    yaml_num_bars = yaml_config["rolling_update"]["num_bars"]
                                 if "target_horizon" in yaml_config["rolling_update"]:
                                     yaml_target_horizon = yaml_config["rolling_update"]["target_horizon"]
                 except Exception as e:
@@ -860,7 +867,8 @@ def start_model_training_internal(config: dict = None) -> dict:
 
             train_config = config or {}
             symbols = train_config.get("symbols", ["SPY", "AAPL", "MSFT"])
-            num_bars = train_config.get("num_bars", yaml_num_bars)
+            # 写死 num_bars = 20000，确保 Walk-Forward 验证能正常执行
+            num_bars = 20000
             target_horizon = train_config.get("target_horizon", yaml_target_horizon)
             interval = train_config.get("interval", yaml_interval or "1min")
 
@@ -872,6 +880,7 @@ def start_model_training_internal(config: dict = None) -> dict:
             bars_per_day = {
                 "1min": 390,    # 6.5小时 × 60分钟
                 "5min": 78,     # 6.5小时 × 12
+                "15min": 26,    # 6.5小时 × 4
                 "1h": 6,        # 6.5小时
                 "1d": 1
             }.get(interval, 78)
@@ -892,6 +901,9 @@ def start_model_training_internal(config: dict = None) -> dict:
 
             df = adapter.load_data(symbols, start_date, end_date)
             training_status["progress"] = 20
+            
+            # 记录实际获取的数据量
+            log_message(f"加载数据完成: {len(df)} 根K线 (目标: {num_bars}, interval: {interval}, days: {days_needed})")
 
             if df.empty:
                 raise ValueError("没有可用的数据")
@@ -900,6 +912,9 @@ def start_model_training_internal(config: dict = None) -> dict:
             if len(df) > num_bars:
                 df = df.iloc[-num_bars:]
                 training_status["message"] = f"加载数据 ({interval}) - 已裁剪到 {num_bars} 根K线"
+                log_message(f"数据已裁剪到 {num_bars} 根K线")
+            else:
+                log_message(f"⚠️ 实际数据量 {len(df)} 少于目标 {num_bars}，使用全部数据")
 
             # 2. 生成特征 (40%)
             training_status["message"] = "生成特征..."
@@ -927,25 +942,206 @@ def start_model_training_internal(config: dict = None) -> dict:
             target = target[valid_mask]
             training_status["progress"] = 50
 
-            # 4. 训练模型 (80%)
-            training_status["message"] = "训练模型..."
-
-            split_idx = int(len(features) * 0.8)
-            X_train, X_valid = features.iloc[:split_idx], features.iloc[split_idx:]
-            y_train, y_valid = target.iloc[:split_idx], target.iloc[split_idx:]
-
-            trainer = LightGBMTrainer(
-                model_name="deepalaph",
-                num_boost_round=300,
-            )
-            trainer.train(X_train, y_train, X_valid, y_valid)
-            training_status["progress"] = 80
-
-            # 5. 评估并保存 (100%)
-            training_status["message"] = "保存模型..."
-            metrics = trainer.evaluate(X_valid, y_valid)
-            trainer.metadata.update(
-                {
+            # 4. Walk-Forward 验证或单次训练
+            data_length = len(features)
+            
+            if data_length >= MIN_BARS_REQUIRED:
+                # 数据充足：执行 Walk-Forward 验证
+                from autotrade.ml.trainer import WalkForwardValidator
+                
+                training_status["message"] = "开始 Walk-Forward 验证..."
+                log_message(f"数据长度 {data_length} >= {MIN_BARS_REQUIRED}，执行 Walk-Forward 验证")
+                
+                # 计算窗口数量
+                train_window = WALK_FORWARD_CONFIG["train_window"]
+                test_window = WALK_FORWARD_CONFIG["test_window"]
+                step_size = WALK_FORWARD_CONFIG["step_size"]
+                total_windows = max(1, (data_length - train_window - test_window) // step_size + 1)
+                
+                # 初始化 walk_forward_progress
+                training_status["walk_forward_progress"] = {
+                    "current_window": 0,
+                    "total_windows": total_windows,
+                    "window_results": [],
+                    "aggregated": None,
+                }
+                
+                # 初始化验证器
+                validator = WalkForwardValidator(
+                    trainer_class=LightGBMTrainer,
+                    train_window=train_window,
+                    test_window=test_window,
+                    step_size=step_size,
+                    model_name="deepalaph",
+                    num_boost_round=300,
+                )
+                
+                # 执行验证（手动循环以支持进度更新）
+                window_results = []
+                n_samples = len(features)
+                start_idx = 0
+                fold = 0
+                
+                while start_idx + train_window + test_window <= n_samples:
+                    train_end = start_idx + train_window
+                    test_end = train_end + test_window
+                    
+                    # 更新进度
+                    fold += 1
+                    progress = 50 + int(40 * fold / total_windows)  # 50-90%
+                    training_status["progress"] = progress
+                    training_status["message"] = f"验证窗口 {fold}/{total_windows}..."
+                    training_status["walk_forward_progress"]["current_window"] = fold
+                    
+                    # 分割数据
+                    X_train = features.iloc[start_idx:train_end]
+                    y_train = target.iloc[start_idx:train_end]
+                    X_test = features.iloc[train_end:test_end]
+                    y_test = target.iloc[train_end:test_end]
+                    
+                    # 训练和评估
+                    try:
+                        fold_trainer = LightGBMTrainer(
+                            model_name="deepalaph",
+                            num_boost_round=300,
+                        )
+                        fold_trainer.train(X_train, y_train)
+                        fold_metrics = fold_trainer.evaluate(X_test, y_test)
+                        
+                        fold_result = {
+                            "fold": fold,
+                            "train_start": start_idx,
+                            "train_end": train_end,
+                            "test_start": train_end,
+                            "test_end": test_end,
+                            "ic": fold_metrics.get("ic", 0),
+                            "icir": fold_metrics.get("icir", 0),
+                            "mse": fold_metrics.get("mse", 0),
+                            "status": "success",
+                        }
+                        
+                        log_message(f"窗口 {fold}: IC={fold_metrics.get('ic', 0):.4f}, ICIR={fold_metrics.get('icir', 0):.4f}")
+                    except Exception as fold_e:
+                        # 单个窗口失败不影响整体
+                        fold_result = {
+                            "fold": fold,
+                            "train_start": start_idx,
+                            "train_end": train_end,
+                            "test_start": train_end,
+                            "test_end": test_end,
+                            "ic": 0,
+                            "icir": 0,
+                            "mse": 0,
+                            "status": "failed",
+                            "error": str(fold_e),
+                        }
+                        log_message(f"窗口 {fold} 失败: {fold_e}")
+                    
+                    window_results.append(fold_result)
+                    training_status["walk_forward_progress"]["window_results"] = window_results
+                    
+                    # 计算并更新累计平均
+                    successful_results = [r for r in window_results if r.get("status") == "success"]
+                    if successful_results:
+                        ic_values = [r["ic"] for r in successful_results]
+                        icir_values = [r["icir"] for r in successful_results]
+                        training_status["walk_forward_progress"]["aggregated"] = {
+                            "ic_mean": float(np.mean(ic_values)),
+                            "ic_std": float(np.std(ic_values)) if len(ic_values) > 1 else 0.0,
+                            "icir_mean": float(np.mean(icir_values)),
+                            "icir_std": float(np.std(icir_values)) if len(icir_values) > 1 else 0.0,
+                            "num_windows": len(successful_results),
+                            "failed_windows": len(window_results) - len(successful_results),
+                        }
+                    
+                    start_idx += step_size
+                
+                # 聚合最终结果
+                aggregated = training_status["walk_forward_progress"]["aggregated"] or {
+                    "ic_mean": 0, "ic_std": 0, "icir_mean": 0, "icir_std": 0,
+                    "num_windows": 0, "failed_windows": len(window_results)
+                }
+                
+                training_status["progress"] = 90
+                training_status["message"] = "使用全部数据训练最终模型..."
+                
+                # 使用全部数据训练最终模型
+                trainer = LightGBMTrainer(
+                    model_name="deepalaph",
+                    num_boost_round=300,
+                )
+                
+                # 80/20 分割用于最终模型
+                split_idx = int(len(features) * 0.8)
+                X_train, X_valid = features.iloc[:split_idx], features.iloc[split_idx:]
+                y_train, y_valid = target.iloc[:split_idx], target.iloc[split_idx:]
+                
+                trainer.train(X_train, y_train, X_valid, y_valid)
+                final_metrics = trainer.evaluate(X_valid, y_valid)
+                
+                # 更新元数据
+                trainer.metadata.update({
+                    "symbols": symbols,
+                    "num_bars": num_bars,
+                    "interval": interval,
+                    "ic": final_metrics["ic"],
+                    "icir": final_metrics["icir"],
+                    "trained_via_ui": True,
+                    "updated_at": datetime.now().isoformat(),
+                    # Walk-Forward 验证结果
+                    "walk_forward_validation": {
+                        "enabled": True,
+                        "config": WALK_FORWARD_CONFIG,
+                        "ic_mean": aggregated["ic_mean"],
+                        "ic_std": aggregated["ic_std"],
+                        "icir_mean": aggregated["icir_mean"],
+                        "icir_std": aggregated["icir_std"],
+                        "num_windows": aggregated["num_windows"],
+                        "failed_windows": aggregated.get("failed_windows", 0),
+                    },
+                })
+                
+                model_path = trainer.save()
+                training_status["progress"] = 100
+                training_status["message"] = (
+                    f"完成！模型: {model_path.name}, "
+                    f"Walk-Forward IC: {aggregated['ic_mean']:.4f} ± {aggregated['ic_std']:.4f}"
+                )
+                
+                log_message(
+                    f"模型训练完成: {model_path.name}, "
+                    f"Walk-Forward IC={aggregated['ic_mean']:.4f}±{aggregated['ic_std']:.4f}, "
+                    f"窗口数={aggregated['num_windows']}"
+                )
+                
+            else:
+                # 数据不足：降级到单次训练
+                log_message(f"⚠️ 数据长度 {data_length} < {MIN_BARS_REQUIRED}，降级到单次训练")
+                training_status["message"] = f"⚠️ 数据不足（{data_length}/{MIN_BARS_REQUIRED}），使用单次训练..."
+                training_status["walk_forward_progress"] = {
+                    "current_window": 0,
+                    "total_windows": 0,
+                    "window_results": [],
+                    "aggregated": None,
+                    "fallback": True,
+                    "reason": f"数据长度 {data_length} 不足最小要求 {MIN_BARS_REQUIRED}",
+                }
+                
+                split_idx = int(len(features) * 0.8)
+                X_train, X_valid = features.iloc[:split_idx], features.iloc[split_idx:]
+                y_train, y_valid = target.iloc[:split_idx], target.iloc[split_idx:]
+                
+                trainer = LightGBMTrainer(
+                    model_name="deepalaph",
+                    num_boost_round=300,
+                )
+                trainer.train(X_train, y_train, X_valid, y_valid)
+                training_status["progress"] = 80
+                
+                # 评估并保存
+                training_status["message"] = "保存模型..."
+                metrics = trainer.evaluate(X_valid, y_valid)
+                trainer.metadata.update({
                     "symbols": symbols,
                     "num_bars": num_bars,
                     "interval": interval,
@@ -953,16 +1149,19 @@ def start_model_training_internal(config: dict = None) -> dict:
                     "icir": metrics["icir"],
                     "trained_via_ui": True,
                     "updated_at": datetime.now().isoformat(),
-                }
-            )
-
-            model_path = trainer.save()
-            training_status["progress"] = 100
-            training_status["message"] = (
-                f"完成！模型: {model_path.name}, IC: {metrics['ic']:.4f}"
-            )
-
-            log_message(f"模型训练完成: {model_path.name}, IC={metrics['ic']:.4f}")
+                    "walk_forward_validation": {
+                        "enabled": False,
+                        "reason": f"数据不足（{data_length}/{MIN_BARS_REQUIRED}）",
+                    },
+                })
+                
+                model_path = trainer.save()
+                training_status["progress"] = 100
+                training_status["message"] = (
+                    f"完成！模型: {model_path.name}, IC: {metrics['ic']:.4f} (单次训练)"
+                )
+                
+                log_message(f"模型训练完成（单次）: {model_path.name}, IC={metrics['ic']:.4f}")
 
         except Exception as e:
             import traceback
@@ -992,6 +1191,7 @@ def start_data_sync_internal(config: dict = None) -> dict:
     def _data_sync_task():
         try:
             from autotrade.research.data import QlibDataAdapter
+            import pandas as pd
 
             data_sync_status["in_progress"] = True
             data_sync_status["progress"] = 0
@@ -1032,6 +1232,7 @@ def start_data_sync_internal(config: dict = None) -> dict:
             bars_per_day = {
                 "1min": 390,
                 "5min": 78,
+                "15min": 26,
                 "1h": 6,
                 "1d": 1
             }.get(interval, 78)
@@ -1052,12 +1253,53 @@ def start_data_sync_internal(config: dict = None) -> dict:
                 symbols, start_date, end_date, update_mode=update_mode
             )
 
+            data_sync_status["progress"] = 90
+            data_sync_status["message"] = "统计同步结果..."
+            
+            # 加载数据并统计详细信息
+            df = adapter.load_data(symbols, start_date, end_date)
+            total_bars = len(df)
+            
+            # 统计每只股票的K线数量和时间范围
+            sync_details = []
+            if isinstance(df.index, pd.MultiIndex):
+                for symbol in symbols:
+                    try:
+                        symbol_df = df.xs(symbol, level='symbol')
+                        symbol_bars = len(symbol_df)
+                        if symbol_bars > 0:
+                            min_time = symbol_df.index.min()
+                            max_time = symbol_df.index.max()
+                            sync_details.append({
+                                "symbol": symbol,
+                                "bars": symbol_bars,
+                                "start": min_time.strftime("%Y-%m-%d %H:%M") if hasattr(min_time, 'strftime') else str(min_time),
+                                "end": max_time.strftime("%Y-%m-%d %H:%M") if hasattr(max_time, 'strftime') else str(max_time),
+                            })
+                            log_message(f"  {symbol}: {symbol_bars} 根K线, 时间范围 {min_time} ~ {max_time}")
+                    except Exception as e:
+                        log_message(f"  {symbol}: 无法获取数据 ({e})")
+            else:
+                # 单个股票的情况
+                if total_bars > 0:
+                    min_time = df.index.min()
+                    max_time = df.index.max()
+                    symbol = symbols[0] if symbols else "UNKNOWN"
+                    sync_details.append({
+                        "symbol": symbol,
+                        "bars": total_bars,
+                        "start": min_time.strftime("%Y-%m-%d %H:%M") if hasattr(min_time, 'strftime') else str(min_time),
+                        "end": max_time.strftime("%Y-%m-%d %H:%M") if hasattr(max_time, 'strftime') else str(max_time),
+                    })
+                    log_message(f"  {symbol}: {total_bars} 根K线, 时间范围 {min_time} ~ {max_time}")
+
             data_sync_status["progress"] = 100
             data_sync_status["last_sync"] = datetime.now().isoformat()
+            data_sync_status["sync_details"] = sync_details
             data_sync_status["message"] = (
-                f"成功同步 {len(symbols)} 只股票的数据 ({interval})"
+                f"成功同步 {len(symbols)} 只股票的数据 ({interval}), 共 {total_bars} 根K线"
             )
-            log_message(f"数据同步完成: {len(symbols)} symbols")
+            log_message(f"数据同步完成: {len(symbols)} symbols, 共 {total_bars} 根K线")
 
         except Exception as e:
             data_sync_status["message"] = f"同步失败: {e}"

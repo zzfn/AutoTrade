@@ -105,12 +105,21 @@ class AlpacaDataProvider(BaseDataProvider):
         client = self._get_client()
         
         # 映射 interval 到 Alpaca TimeFrame
+        from alpaca.data.timeframe import TimeFrameUnit
+        
         if interval == "1min":
             tf = TimeFrame.Minute
+        elif interval == "5min":
+            tf = TimeFrame(5, TimeFrameUnit.Minute)
+        elif interval == "15min":
+            tf = TimeFrame(15, TimeFrameUnit.Minute)
         elif interval == "1h":
             tf = TimeFrame.Hour
-        else:
+        elif interval == "1d":
             tf = TimeFrame.Day
+        else:
+            logger.warning(f"未知的 interval: {interval}，使用 5min 作为默认值")
+            tf = TimeFrame(5, TimeFrameUnit.Minute)
 
         request = StockBarsRequest(
             symbol_or_symbols=symbols,
