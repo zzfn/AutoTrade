@@ -88,10 +88,3 @@ strategy:
     # 交易间隔
     sleeptime: "1M"
 
-# Walk-Forward 验证配置
-validation:
-  enabled: false
-  train_window: 252 # 约 1 年
-  test_window: 21 # 约 1 个月
-  step_size: 21
-
