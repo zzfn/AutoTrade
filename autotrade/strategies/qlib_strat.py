@@ -41,11 +41,11 @@ class QlibMLStrategy(Strategy):
     parameters = {
         "symbols": ["SPY", "AAPL", "MSFT", "GOOGL", "AMZN"],
         "model_name": None,  # None means use ModelManager's current model
-        "top_k": 3,
+        "top_k": 4,
         "lookback_period": 2,  # Fetch 2 days of history (1min: ~780 bars)
         "sleeptime": "1D",
         "models_dir": "models",
-        "position_sizing": "equal",  # "equal" or "weighted"
+        "position_sizing": "weighted",  # "equal" or "weighted"
     }
 
     def initialize(self):
@@ -382,52 +382,53 @@ class QlibMLStrategy(Strategy):
 
     def _select_top_k(self, predictions: dict) -> list:
         """
-        Select Top-K stocks with highest prediction scores.
+        Select Top-K stocks with highest absolute prediction scores.
 
         Args:
             predictions: {symbol: score} dictionary
 
         Returns:
-            List of Top-K stock symbols
+            List of Top-K stock symbols (sorted by absolute score, descending)
         """
         if not predictions:
             return []
 
-        # Sort by score
+        # Sort by absolute score
         sorted_symbols = sorted(
-            predictions.keys(), key=lambda x: predictions[x], reverse=True
+            predictions.keys(),
+            key=lambda x: abs(predictions[x]),
+            reverse=True
         )
 
         return sorted_symbols[: self.top_k]
 
     def _calculate_target_weights(self, predictions: dict, target_symbols: list) -> dict:
         """
-        Calculate target weights for each symbol based on position_sizing mode.
+        Calculate target weights for each symbol based on absolute prediction scores.
 
         Args:
             predictions: {symbol: predicted_return} dictionary
             target_symbols: List of target stock symbols
 
         Returns:
-            {symbol: weight} dictionary where weights sum to 1.0
+            {symbol: weight} dictionary where weights are positive and sum to 1.0
+            The sign of the prediction determines long (positive) or short (negative)
         """
         if not target_symbols:
             return {}
 
+        # Get absolute prediction scores for target symbols
+        abs_scores = np.array([abs(predictions.get(s, 0.0)) for s in target_symbols])
+
         if self.position_sizing == "weighted":
-            # Get prediction scores for target symbols
-            scores = np.array([predictions.get(s, 0.0) for s in target_symbols])
-            
-            # Linear normalization: shift scores to be positive, then normalize
-            # w_i = (s_i - min + epsilon) / sum(s_j - min + epsilon)
-            min_score = np.min(scores)
-            # Shift to make all scores positive (add small epsilon to avoid zero weights)
-            shifted_scores = scores - min_score + 1e-6
-            weights = shifted_scores / np.sum(shifted_scores)
-            
+            # Weight by absolute prediction scores
+            # w_i = |s_i| / sum(|s_j|)
+            total_abs_score = np.sum(abs_scores) + 1e-6  # Avoid division by zero
+            weights = abs_scores / total_abs_score
+
             return {symbol: float(w) for symbol, w in zip(target_symbols, weights)}
         else:
-            # Equal weighting (default)
+            # Equal weighting
             weight = 1.0 / len(target_symbols)
             return {symbol: weight for symbol in target_symbols}
 
@@ -494,7 +495,7 @@ class QlibMLStrategy(Strategy):
             predictions = self.current_predictions or {}
         weights = self._calculate_target_weights(predictions, target_symbols)
 
-        # Buy/adjust based on weights
+        # Buy/adjust based on weights and prediction signs
         for symbol in target_symbols:
             try:
                 price = self.get_last_price(symbol)
@@ -504,45 +505,109 @@ class QlibMLStrategy(Strategy):
                 # Calculate target allocation for this symbol
                 weight = weights.get(symbol, 0.0)
                 target_value = available_capital * weight
-                target_qty = int(target_value / price)
+                base_qty = int(target_value / price)
+
+                # Determine direction based on prediction sign
+                prediction = predictions.get(symbol, 0.0)
+                if prediction >= 0:
+                    # Long position
+                    target_qty = base_qty
+                    direction = "LONG"
+                else:
+                    # Short position
+                    target_qty = -base_qty
+                    direction = "SHORT"
 
                 # Get current position
                 current_qty = current_positions.get(symbol, 0)
-                if current_qty < 0:
-                    cover_qty = abs(current_qty)
-                    if cover_qty > 0:
-                        self.log_message(
-                            f"Covering short {symbol}: {cover_qty} shares (buying to cover)"
-                        )
-                        order = self.create_order(symbol, cover_qty, "buy")
-                        self.submit_order(order)
-                    current_qty = 0
 
                 # Calculate difference
                 diff = target_qty - current_qty
 
-                if diff > 0:
-                    # Need to buy
-                    cash = self.get_cash()
-                    max_buyable = int(cash / price)
-                    buy_qty = min(diff, max_buyable)
+                if diff == 0:
+                    continue
 
+                # Handle position transitions
+                if current_qty < 0 and target_qty > 0:
+                    # Cover short then open long
+                    cover_qty = abs(current_qty)
+                    if cover_qty > 0:
+                        self.log_message(
+                            f"Covering short {symbol}: {cover_qty} shares @ ${price:.2f}"
+                        )
+                        order = self.create_order(symbol, cover_qty, "buy")
+                        self.submit_order(order)
+                    # Then buy for long position
+                    buy_qty = target_qty
                     if buy_qty > 0:
                         self.log_message(
-                            f"Buying {symbol}: {buy_qty} shares @ ${price:.2f} (weight: {weight:.2%})"
+                            f"Buying {symbol}: {buy_qty} shares @ ${price:.2f} ({direction}, weight: {weight:.2%}, pred: {prediction:.4f})"
                         )
                         order = self.create_order(symbol, buy_qty, "buy")
                         self.submit_order(order)
 
-                elif diff < 0:
-                    # Need to sell some
-                    sell_qty = abs(diff)
+                elif current_qty > 0 and target_qty < 0:
+                    # Sell long then open short
+                    sell_qty = current_qty
                     if sell_qty > 0:
                         self.log_message(
-                            f"Reducing {symbol}: {sell_qty} shares @ ${price:.2f}"
+                            f"Selling {symbol}: {sell_qty} shares @ ${price:.2f}"
                         )
                         order = self.create_order(symbol, sell_qty, "sell")
                         self.submit_order(order)
+                    # Then sell for short position
+                    short_qty = abs(target_qty)
+                    if short_qty > 0:
+                        self.log_message(
+                            f"Shorting {symbol}: {short_qty} shares @ ${price:.2f} ({direction}, weight: {weight:.2%}, pred: {prediction:.4f})"
+                        )
+                        order = self.create_order(symbol, short_qty, "sell")
+                        self.submit_order(order)
+
+                elif diff > 0:
+                    # Need to buy more (increase long or cover short)
+                    if target_qty > 0:
+                        # Adding to long position
+                        cash = self.get_cash()
+                        max_buyable = int(cash / price)
+                        buy_qty = min(diff, max_buyable)
+
+                        if buy_qty > 0:
+                            self.log_message(
+                                f"Buying {symbol}: {buy_qty} shares @ ${price:.2f} ({direction}, weight: {weight:.2%}, pred: {prediction:.4f})"
+                            )
+                            order = self.create_order(symbol, buy_qty, "buy")
+                            self.submit_order(order)
+                    else:
+                        # Covering part of short position (reducing short)
+                        cover_qty = min(diff, abs(current_qty))
+                        if cover_qty > 0:
+                            self.log_message(
+                                f"Covering short {symbol}: {cover_qty} shares @ ${price:.2f}"
+                            )
+                            order = self.create_order(symbol, cover_qty, "buy")
+                            self.submit_order(order)
+
+                elif diff < 0:
+                    # Need to sell more (reduce long or increase short)
+                    if target_qty >= 0:
+                        # Reducing long position
+                        sell_qty = abs(diff)
+                        if sell_qty > 0:
+                            self.log_message(
+                                f"Selling {symbol}: {sell_qty} shares @ ${price:.2f}"
+                            )
+                            order = self.create_order(symbol, sell_qty, "sell")
+                            self.submit_order(order)
+                    else:
+                        # Adding to short position
+                        short_qty = abs(diff)
+                        if short_qty > 0:
+                            self.log_message(
+                                f"Shorting {symbol}: {short_qty} shares @ ${price:.2f} ({direction}, weight: {weight:.2%}, pred: {prediction:.4f})"
+                            )
+                            order = self.create_order(symbol, short_qty, "sell")
+                            self.submit_order(order)
 
             except Exception as e:
                 self.log_message(f"Failed to adjust position for {symbol}: {e}")
