@@ -54,53 +54,125 @@ def setup_logging():
 # =============================================================================
 
 # =============================================================================
-# Import 追踪器：找出到底卡在哪个模块
+# Import 追踪器（增强版）：找出到底卡在哪个模块
 # =============================================================================
 import sys
 import builtins
+import time
+import traceback
+
+# 尝试获取内存使用
+try:
+    import resource
+    def get_memory_mb():
+        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024  # macOS: KB -> MB
+except ImportError:
+    def get_memory_mb():
+        return -1
 
 _original_import = builtins.__import__
 _import_depth = 0
+_import_times = {}  # 记录每个模块的导入时间
+_import_stack = []  # 导入栈
 
 def _tracing_import(name, *args, **kwargs):
     global _import_depth
-    # 只追踪顶层和 lumibot 相关的 import
-    if _import_depth == 0 or name.startswith(('lumibot', 'pandas', 'numpy', 'sklearn', 'torch', 'tensorflow')):
-        print(f"[IMPORT] {name}", flush=True)
+    start_time = time.time()
+    indent = "  " * _import_depth
+    
+    # 追踪所有顶层导入和关键模块
+    should_trace = (
+        _import_depth == 0 or 
+        name.startswith(('lumibot', 'pandas', 'numpy', 'sklearn', 'torch', 'tensorflow', 'alpaca', 'matplotlib')) or
+        _import_depth <= 2  # 追踪前2层嵌套
+    )
+    
+    if should_trace:
+        mem = get_memory_mb()
+        mem_str = f" [MEM:{mem:.0f}MB]" if mem > 0 else ""
+        print(f"[IMPORT] {indent}>>> {name}{mem_str}", flush=True)
+    
+    _import_stack.append(name)
     _import_depth += 1
+    
     try:
-        return _original_import(name, *args, **kwargs)
+        result = _original_import(name, *args, **kwargs)
+        elapsed = time.time() - start_time
+        _import_times[name] = elapsed
+        
+        if should_trace and elapsed > 0.5:  # 超过 0.5 秒的导入标记为慢
+            print(f"[IMPORT] {indent}<<< {name} ⚠️ SLOW ({elapsed:.2f}s)", flush=True)
+        elif should_trace:
+            print(f"[IMPORT] {indent}<<< {name} ({elapsed:.2f}s)", flush=True)
+        
+        return result
+    except Exception as e:
+        elapsed = time.time() - start_time
+        print(f"[IMPORT] {indent}!!! {name} FAILED after {elapsed:.2f}s: {e}", flush=True)
+        print(f"[IMPORT] Import stack: {' -> '.join(_import_stack)}", flush=True)
+        traceback.print_exc()
+        raise
     finally:
         _import_depth -= 1
+        _import_stack.pop()
 
 # 启用 import 追踪
 builtins.__import__ = _tracing_import
-print("[BOOT] Import 追踪已启用", flush=True)
+print("[BOOT] Import 追踪已启用（增强版：显示耗时和内存）", flush=True)
+print(f"[BOOT] 初始内存: {get_memory_mb():.0f}MB", flush=True)
 
 # 开始 import
-print("[BOOT] Step 1: import matplotlib...", flush=True)
-import matplotlib
-print(f"[BOOT] Step 1 done: matplotlib {matplotlib.__version__}", flush=True)
-
-print("[BOOT] Step 2: import matplotlib.font_manager...", flush=True)
-import matplotlib.font_manager
-print("[BOOT] Step 2 done", flush=True)
-
-print("[BOOT] Step 3: import lumibot.strategies.strategy...", flush=True)
-from lumibot.strategies.strategy import Strategy
-print("[BOOT] Step 3 done", flush=True)
+try:
+    print("\n[BOOT] ========== Step 1: import matplotlib ==========", flush=True)
+    t0 = time.time()
+    import matplotlib
+    print(f"[BOOT] Step 1 done: matplotlib {matplotlib.__version__} ({time.time()-t0:.2f}s)", flush=True)
+    
+    print("\n[BOOT] ========== Step 2: import matplotlib.font_manager ==========", flush=True)
+    t0 = time.time()
+    import matplotlib.font_manager
+    print(f"[BOOT] Step 2 done ({time.time()-t0:.2f}s)", flush=True)
+    
+    print("\n[BOOT] ========== Step 3: import lumibot.strategies.strategy ==========", flush=True)
+    print(f"[BOOT] 当前内存: {get_memory_mb():.0f}MB", flush=True)
+    t0 = time.time()
+    from lumibot.strategies.strategy import Strategy
+    print(f"[BOOT] Step 3 done ({time.time()-t0:.2f}s)", flush=True)
+    
+except Exception as e:
+    print(f"\n[BOOT] ❌ Import 失败: {e}", flush=True)
+    traceback.print_exc()
+    # 打印最慢的导入
+    if _import_times:
+        print("\n[BOOT] 导入耗时排行（前10）:", flush=True)
+        sorted_times = sorted(_import_times.items(), key=lambda x: x[1], reverse=True)[:10]
+        for name, t in sorted_times:
+            print(f"  {t:.2f}s - {name}", flush=True)
+    sys.exit(1)
 
 # 关闭追踪
 builtins.__import__ = _original_import
-print("[BOOT] Import 追踪已关闭", flush=True)
+print("\n[BOOT] Import 追踪已关闭", flush=True)
 
-print("[BOOT] Step 4: import lumibot.brokers...", flush=True)
+# 打印导入统计
+if _import_times:
+    print("\n[BOOT] 导入耗时排行（前10）:", flush=True)
+    sorted_times = sorted(_import_times.items(), key=lambda x: x[1], reverse=True)[:10]
+    for name, t in sorted_times:
+        print(f"  {t:.2f}s - {name}", flush=True)
+
+print(f"[BOOT] 当前内存: {get_memory_mb():.0f}MB", flush=True)
+
+print("\n[BOOT] ========== Step 4: import lumibot.brokers ==========", flush=True)
+t0 = time.time()
 from lumibot.brokers import Alpaca
-print("[BOOT] Step 4 done", flush=True)
+print(f"[BOOT] Step 4 done ({time.time()-t0:.2f}s)", flush=True)
 
-print("[BOOT] Step 5: import lumibot.traders...", flush=True)
+print("\n[BOOT] ========== Step 5: import lumibot.traders ==========", flush=True)
+t0 = time.time()
 from lumibot.traders import Trader
-print("[BOOT] Step 5 done: 所有 import 完成!", flush=True)
+print(f"[BOOT] Step 5 done: 所有 import 完成! ({time.time()-t0:.2f}s)", flush=True)
+print(f"[BOOT] 最终内存: {get_memory_mb():.0f}MB", flush=True)
 
 
 class SimpleTestStrategy(Strategy):
