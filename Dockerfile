@@ -39,9 +39,11 @@ COPY . .
 RUN uv sync
 
 # 修复 polars 二进制不兼容问题：
-# polars 是 Rust 编译的，可能存在架构不匹配问题
-# 强制在容器内重新安装，确保二进制匹配当前架构
-RUN uv pip install --force-reinstall polars
+# 在 Apple ARM (M1/M2) 上通过 Rosetta 运行 x86-64 容器时，
+# 标准 polars 需要 AVX/AVX2 等 CPU 指令集，Rosetta 不支持
+# 使用 polars-lts-cpu 是官方推荐的兼容版本
+RUN uv pip uninstall polars -y 2>/dev/null || true && \
+    uv pip install polars-lts-cpu
 
 # 治本：在构建时预热并验证所有依赖
 # 如果任何导入失败，构建会失败（而不是运行时失败）
