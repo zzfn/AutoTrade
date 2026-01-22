@@ -27,19 +27,19 @@
 ### 2. 默认参数（平衡模式）
 ```python
 DEFAULT_WALK_FORWARD_CONFIG = {
-    "train_window": 180,    # 6 个月训练
-    "test_window": 15,      # 15 天测试
-    "step_size": 15         # 15 天滚动
+    "train_window": 2000,   # 2000 根K线训练（5min数据约 18 天）
+    "test_window": 200,     # 200 根K线测试（5min数据约 1.8 天）
+    "step_size": 200        # 200 根K线滚动
 }
 ```
 
 ### 3. 动态窗口调整
-- 根据数据长度自动调整窗口大小
+- 根据数据点数量自动调整窗口大小
 - 确保至少能进行 2 个窗口的验证
 - 调整策略：
-  - 如果数据不足 10 个月：缩小到 `train_window=90, test_window=10, step_size=10`
-  - 如果数据不足 4 个月：进一步缩小到 `train_window=60, test_window=7, step_size=7`
-  - 如果数据不足 2 个月：降级到单次训练（80/20）+ 警告提示
+  - 如果数据不足 5000 根：缩小到 `train_window=1000, test_window=100, step_size=100`
+  - 如果数据不足 2000 根：进一步缩小到 `train_window=500, test_window=50, step_size=50`
+  - 如果数据不足 1000 根：降级到单次训练（80/20）+ 警告提示
 
 ### 4. WalkForwardValidator 集成
 `WalkForwardValidator` 类已存在于 `autotrade/ml/trainer.py:306`，需要：

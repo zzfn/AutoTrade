@@ -48,26 +48,26 @@
 
 # 默认参数（平衡模式）
 DEFAULT_WALK_FORWARD_CONFIG = {
-    "train_window": 180,    # 6 个月
-    "test_window": 15,      # 15 天
-    "step_size": 15
+    "train_window": 2000,   # 2000 根K线
+    "test_window": 200,     # 200 根K线
+    "step_size": 200        # 200 根K线
 }
 
-# 计算数据长度（天）
-data_length_days = (df.index[-1] - df.index[0]).days
+# 计算数据长度（数据点数量）
+num_data_points = len(df)
 
 # 动态调整策略
-def adjust_windows(data_length_days):
-    if data_length_days >= 300:  # 10 个月
-        return (180, 15, 15)  # 标准模式
-    elif data_length_days >= 120:  # 4 个月
-        return (90, 10, 10)  # 较小窗口
-    elif data_length_days >= 60:  # 2 个月
-        return (60, 7, 7)  # 最小窗口
+def adjust_windows(num_data_points):
+    if num_data_points >= 5000:  # 数据充足
+        return (2000, 200, 200)  # 标准模式
+    elif num_data_points >= 2000:  # 数据较少
+        return (1000, 100, 100)  # 较小窗口
+    elif num_data_points >= 1000:  # 数据稀少
+        return (500, 50, 50)  # 最小窗口
     else:
         return None  # 降级到单次训练
 
-config = adjust_windows(data_length_days)
+config = adjust_windows(num_data_points)
 ```
 
 ### 2. Walk-Forward 验证流程
