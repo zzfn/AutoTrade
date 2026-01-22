@@ -14,8 +14,8 @@ data:
     - NVDA
     - TSLA
 
-  # 数据频率：1min, 1h, 1d
-  interval: 1min
+  # 数据频率：1min, 5min, 1h, 1d
+  interval: 5min
 
   # 数据源优先级: alpaca > yfinance
   data_dir: datasets
@@ -73,7 +73,7 @@ model:
   early_stopping_rounds: 50
 
   # 目标变量
-  target_horizon: 60 # 预测未来 60 分钟收益（1分钟数据）
+  target_horizon: 12 # 预测未来 12 * 5min = 60 分钟收益
 
 # 策略配置
 strategy:
@@ -87,9 +87,6 @@ strategy:
 
     # 交易间隔
     sleeptime: "1M"
-
-    # 数据频率
-    interval: 1min
 
 # Walk-Forward 验证配置
 validation:
