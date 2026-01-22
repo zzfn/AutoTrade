@@ -20,11 +20,11 @@ data:
   # 数据源优先级: alpaca > yfinance
   data_dir: datasets
 
-  # 历史数据天数
-  train_days: 30 # 1分钟数据量较大，减少天数
-  valid_days: 7
+  # 历史K线数量（数据点数量）
+  num_bars: 10000  # 获取 10000 根 K线（5min 数据约 35 天，1min 数据约 7 天）
+  valid_bars: 2000
 
-  # 策略回看周期
+  # 策略回看周期（数据点数量）
   lookback_period: 300
 
 # 特征工程配置

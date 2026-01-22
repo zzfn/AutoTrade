@@ -833,7 +833,7 @@ def start_model_training_internal(config: dict = None) -> dict:
             config_path = os.path.join(base_dir, "../../configs/qlib_ml_config.yaml")
 
             yaml_interval = None
-            yaml_train_days = 30
+            yaml_num_bars = 10000
             yaml_target_horizon = 60
 
             if os.path.exists(config_path):
@@ -844,15 +844,15 @@ def start_model_training_internal(config: dict = None) -> dict:
                             if "data" in yaml_config:
                                 if "interval" in yaml_config["data"]:
                                     yaml_interval = yaml_config["data"]["interval"]
-                                if "train_days" in yaml_config["data"]:
-                                    yaml_train_days = yaml_config["data"]["train_days"]
+                                if "num_bars" in yaml_config["data"]:
+                                    yaml_num_bars = yaml_config["data"]["num_bars"]
                             if "model" in yaml_config and "target_horizon" in yaml_config["model"]:
                                 yaml_target_horizon = yaml_config["model"]["target_horizon"]
                             if "rolling_update" in yaml_config:
                                 if "interval" in yaml_config["rolling_update"]:
                                     yaml_interval = yaml_config["rolling_update"].get("interval", yaml_interval)
-                                if "train_days" in yaml_config["rolling_update"]:
-                                    yaml_train_days = yaml_config["rolling_update"]["train_days"]
+                                if "num_bars" in yaml_config["rolling_update"]:
+                                    yaml_num_bars = yaml_config["rolling_update"]["num_bars"]
                                 if "target_horizon" in yaml_config["rolling_update"]:
                                     yaml_target_horizon = yaml_config["rolling_update"]["target_horizon"]
                 except Exception as e:
@@ -860,7 +860,7 @@ def start_model_training_internal(config: dict = None) -> dict:
 
             train_config = config or {}
             symbols = train_config.get("symbols", ["SPY", "AAPL", "MSFT"])
-            train_days = train_config.get("train_days", yaml_train_days)
+            num_bars = train_config.get("num_bars", yaml_num_bars)
             target_horizon = train_config.get("target_horizon", yaml_target_horizon)
             interval = train_config.get("interval", yaml_interval or "1min")
 
@@ -868,9 +868,20 @@ def start_model_training_internal(config: dict = None) -> dict:
             training_status["progress"] = 10
             training_status["message"] = f"加载数据 ({interval})..."
 
+            # 根据 interval 估算每天的交易K线数量
+            bars_per_day = {
+                "1min": 390,    # 6.5小时 × 60分钟
+                "5min": 78,     # 6.5小时 × 12
+                "1h": 6,        # 6.5小时
+                "1d": 1
+            }.get(interval, 78)
+
+            # 计算需要的时间范围（额外加 50% buffer）
+            days_needed = int(num_bars / bars_per_day * 1.5) + 30
+
             adapter = QlibDataAdapter(interval=interval)
             end_date = datetime.now()
-            start_date = end_date - timedelta(days=train_days + 60)
+            start_date = end_date - timedelta(days=days_needed)
 
             try:
                 adapter.fetch_and_store(
@@ -884,6 +895,11 @@ def start_model_training_internal(config: dict = None) -> dict:
 
             if df.empty:
                 raise ValueError("没有可用的数据")
+
+            # 裁剪到最新的 num_bars 根K线
+            if len(df) > num_bars:
+                df = df.iloc[-num_bars:]
+                training_status["message"] = f"加载数据 ({interval}) - 已裁剪到 {num_bars} 根K线"
 
             # 2. 生成特征 (40%)
             training_status["message"] = "生成特征..."
@@ -931,7 +947,7 @@ def start_model_training_internal(config: dict = None) -> dict:
             trainer.metadata.update(
                 {
                     "symbols": symbols,
-                    "train_days": train_days,
+                    "num_bars": num_bars,
                     "interval": interval,
                     "ic": metrics["ic"],
                     "icir": metrics["icir"],
@@ -986,7 +1002,7 @@ def start_data_sync_internal(config: dict = None) -> dict:
             config_path = os.path.join(base_dir, "../../configs/qlib_ml_config.yaml")
 
             yaml_interval = None
-            yaml_days = 30
+            yaml_num_bars = 10000
 
             if os.path.exists(config_path):
                 try:
@@ -996,25 +1012,36 @@ def start_data_sync_internal(config: dict = None) -> dict:
                             if "data" in yaml_config:
                                 if "interval" in yaml_config["data"]:
                                     yaml_interval = yaml_config["data"]["interval"]
-                                if "train_days" in yaml_config["data"]:
-                                    yaml_days = yaml_config["data"]["train_days"]
+                                if "num_bars" in yaml_config["data"]:
+                                    yaml_num_bars = yaml_config["data"]["num_bars"]
                             if "rolling_update" in yaml_config:
                                 if "interval" in yaml_config["rolling_update"]:
                                     yaml_interval = yaml_config["rolling_update"].get("interval", yaml_interval)
-                                if "train_days" in yaml_config["rolling_update"]:
-                                    yaml_days = yaml_config["rolling_update"]["train_days"]
+                                if "num_bars" in yaml_config["rolling_update"]:
+                                    yaml_num_bars = yaml_config["rolling_update"]["num_bars"]
                 except Exception as e:
                     log_message(f"Error reading YAML config: {e}")
 
             sync_config = config or {}
             symbols = sync_config.get("symbols", ["SPY", "AAPL", "MSFT"])
-            days = sync_config.get("days", yaml_days)
+            num_bars = sync_config.get("num_bars", yaml_num_bars)
             interval = sync_config.get("interval", yaml_interval or "1min")
             update_mode = sync_config.get("update_mode", "append")
 
+            # 根据 interval 估算每天的交易K线数量
+            bars_per_day = {
+                "1min": 390,
+                "5min": 78,
+                "1h": 6,
+                "1d": 1
+            }.get(interval, 78)
+
+            # 计算需要的时间范围
+            days_needed = int(num_bars / bars_per_day * 1.5) + 30
+
             adapter = QlibDataAdapter(interval=interval)
             end_date = datetime.now()
-            start_date = end_date - timedelta(days=days)
+            start_date = end_date - timedelta(days=days_needed)
 
             data_sync_status["message"] = (
                 f"正在从 Alpaca 获取 {len(symbols)} 只股票的数据..."
@@ -1228,8 +1255,8 @@ async def get_data_config():
         config = {
             "symbols": ["SPY", "QQQ", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA"],
             "interval": "1min",
-            "train_days": 30,
-            "valid_days": 7,
+            "num_bars": 10000,
+            "valid_bars": 2000,
             "lookback_period": 300
         }
 
@@ -1243,10 +1270,10 @@ async def get_data_config():
                         config["symbols"] = data_conf["symbols"]
                     if "interval" in data_conf:
                         config["interval"] = data_conf["interval"]
-                    if "train_days" in data_conf:
-                        config["train_days"] = data_conf["train_days"]
-                    if "valid_days" in data_conf:
-                        config["valid_days"] = data_conf["valid_days"]
+                    if "num_bars" in data_conf:
+                        config["num_bars"] = data_conf["num_bars"]
+                    if "valid_bars" in data_conf:
+                        config["valid_bars"] = data_conf["valid_bars"]
                     if "lookback_period" in data_conf:
                         config["lookback_period"] = data_conf["lookback_period"]
 
