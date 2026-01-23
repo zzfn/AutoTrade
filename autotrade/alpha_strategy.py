@@ -369,10 +369,7 @@ class AlphaStrategy(Strategy):
                         cache_max_ts = pd.Timestamp(cached_data.index.get_level_values(ts_level).max())
                         current_ts = pd.Timestamp(current_time) if current_time else None
                         if current_ts is not None:
-                            if cache_max_ts.tzinfo is None and current_ts.tzinfo is not None:
-                                cache_max_ts = cache_max_ts.tz_localize(current_ts.tzinfo)
-                            elif cache_max_ts.tzinfo is not None and current_ts.tzinfo is None:
-                                current_ts = current_ts.tz_localize(cache_max_ts.tzinfo)
+                            cache_max_ts, current_ts = self._align_cache_timestamps(cache_max_ts, current_ts)
                             if current_ts - cache_max_ts > timedelta(days=2):
                                 self.log_message(f"缓存数据过旧(最新: {cache_max_ts}), 将从 API 获取")
                                 cached_data = pd.DataFrame()
@@ -629,94 +626,138 @@ class AlphaStrategy(Strategy):
             return order_plan
             
         available_capital = total_value * 0.95  # 保留 5% 现金缓冲
+        buy_budget = min(self.get_cash() * 0.95, available_capital)
         weights = self._calculate_target_weights(predictions, target_symbols)
         
-        # 3. 计算每个目标股票的订单
+        # 3. 预计算目标仓位与买入权重
+        target_info = []
         for symbol in target_symbols:
             try:
                 price = self.get_last_price(symbol)
                 if not price or price <= 0:
                     continue
-                
+
                 weight = weights.get(symbol, 0.0)
                 target_value = available_capital * weight
                 base_qty = int(target_value / price)
-                
-                # 根据预测方向决定多空
+
                 prediction = predictions.get(symbol, 0.0)
                 target_qty = base_qty if prediction >= 0 else -base_qty
-                direction = "LONG" if prediction >= 0 else "SHORT"
-                
                 current_qty = current_positions.get(symbol, 0)
                 diff = target_qty - current_qty
-                
-                if diff == 0:
-                    continue
-                
-                # 处理仓位转换（从多转空或从空转多）
-                if current_qty < 0 and target_qty > 0:
-                    # 先平空再开多
+
+                target_info.append({
+                    "symbol": symbol,
+                    "price": price,
+                    "weight": weight,
+                    "prediction": prediction,
+                    "target_qty": target_qty,
+                    "current_qty": current_qty,
+                    "diff": diff,
+                })
+            except Exception as e:
+                self.log_message(f"计算 {symbol} 目标仓位失败: {e}")
+
+        buy_weight_total = sum(
+            info["weight"]
+            for info in target_info
+            if info["target_qty"] > 0 and (info["current_qty"] < 0 or info["diff"] > 0)
+        )
+
+        # 4. 计算每个目标股票的订单
+        for info in target_info:
+            symbol = info["symbol"]
+            price = info["price"]
+            weight = info["weight"]
+            prediction = info["prediction"]
+            target_qty = info["target_qty"]
+            current_qty = info["current_qty"]
+            diff = info["diff"]
+            direction = "LONG" if prediction >= 0 else "SHORT"
+
+            if diff == 0:
+                continue
+
+            if buy_weight_total > 0:
+                buy_budget_per_symbol = buy_budget * weight / buy_weight_total
+            else:
+                buy_budget_per_symbol = 0.0
+            max_buyable = int(buy_budget_per_symbol / price) if price > 0 else 0
+
+            # 处理仓位转换（从多转空或从空转多）
+            if current_qty < 0 and target_qty > 0:
+                # 先平空再开多
+                order_plan.append({
+                    "symbol": symbol, "qty": abs(current_qty),
+                    "side": "buy", "reason": "cover_short"
+                })
+                buy_qty = min(target_qty, max_buyable)
+                if buy_qty > 0:
                     order_plan.append({
-                        "symbol": symbol, "qty": abs(current_qty),
-                        "side": "buy", "reason": "cover_short"
-                    })
-                    order_plan.append({
-                        "symbol": symbol, "qty": target_qty,
+                        "symbol": symbol, "qty": buy_qty,
                         "side": "buy", "reason": f"open_long ({direction}, weight: {weight:.2%}, pred: {prediction:.4f})"
                     })
-                elif current_qty > 0 and target_qty < 0:
-                    # 先平多再开空
-                    order_plan.append({
-                        "symbol": symbol, "qty": current_qty,
-                        "side": "sell", "reason": "close_long"
-                    })
-                    order_plan.append({
-                        "symbol": symbol, "qty": abs(target_qty),
-                        "side": "sell", "reason": f"open_short ({direction}, weight: {weight:.2%}, pred: {prediction:.4f})"
-                    })
-                elif diff > 0:
-                    # 需要买入更多
-                    if target_qty > 0:
-                        # 增加多头仓位
-                        cash = self.get_cash()
-                        max_buyable = int(cash / price)
-                        buy_qty = min(diff, max_buyable)
-                        if buy_qty > 0:
-                            order_plan.append({
-                                "symbol": symbol, "qty": buy_qty,
-                                "side": "buy", "reason": f"add_long ({direction}, weight: {weight:.2%}, pred: {prediction:.4f})"
-                            })
-                    else:
-                        # 减少空头仓位
-                        cover_qty = min(diff, abs(current_qty))
-                        if cover_qty > 0:
-                            order_plan.append({
-                                "symbol": symbol, "qty": cover_qty,
-                                "side": "buy", "reason": "reduce_short"
-                            })
-                elif diff < 0:
-                    # 需要卖出更多
-                    if target_qty >= 0:
-                        # 减少多头仓位
-                        sell_qty = abs(diff)
-                        if sell_qty > 0:
-                            order_plan.append({
-                                "symbol": symbol, "qty": sell_qty,
-                                "side": "sell", "reason": "reduce_long"
-                            })
-                    else:
-                        # 增加空头仓位
-                        short_qty = abs(diff)
-                        if short_qty > 0:
-                            order_plan.append({
-                                "symbol": symbol, "qty": short_qty,
-                                "side": "sell", "reason": f"add_short ({direction}, weight: {weight:.2%}, pred: {prediction:.4f})"
-                            })
-                            
-            except Exception as e:
-                self.log_message(f"计算 {symbol} 订单失败: {e}")
+            elif current_qty > 0 and target_qty < 0:
+                # 先平多再开空
+                order_plan.append({
+                    "symbol": symbol, "qty": current_qty,
+                    "side": "sell", "reason": "close_long"
+                })
+                order_plan.append({
+                    "symbol": symbol, "qty": abs(target_qty),
+                    "side": "sell", "reason": f"open_short ({direction}, weight: {weight:.2%}, pred: {prediction:.4f})"
+                })
+            elif diff > 0:
+                # 需要买入更多
+                if target_qty > 0:
+                    # 增加多头仓位
+                    buy_qty = min(diff, max_buyable)
+                    if buy_qty > 0:
+                        order_plan.append({
+                            "symbol": symbol, "qty": buy_qty,
+                            "side": "buy", "reason": f"add_long ({direction}, weight: {weight:.2%}, pred: {prediction:.4f})"
+                        })
+                else:
+                    # 减少空头仓位
+                    cover_qty = min(diff, abs(current_qty))
+                    if cover_qty > 0:
+                        order_plan.append({
+                            "symbol": symbol, "qty": cover_qty,
+                            "side": "buy", "reason": "reduce_short"
+                        })
+            elif diff < 0:
+                # 需要卖出更多
+                if target_qty >= 0:
+                    # 减少多头仓位
+                    sell_qty = abs(diff)
+                    if sell_qty > 0:
+                        order_plan.append({
+                            "symbol": symbol, "qty": sell_qty,
+                            "side": "sell", "reason": "reduce_long"
+                        })
+                else:
+                    # 增加空头仓位
+                    short_qty = abs(diff)
+                    if short_qty > 0:
+                        order_plan.append({
+                            "symbol": symbol, "qty": short_qty,
+                            "side": "sell", "reason": f"add_short ({direction}, weight: {weight:.2%}, pred: {prediction:.4f})"
+                        })
         
         return order_plan
+
+    @staticmethod
+    def _align_cache_timestamps(cache_max_ts: pd.Timestamp, current_ts: pd.Timestamp) -> tuple[pd.Timestamp, pd.Timestamp]:
+        """
+        对齐缓存与当前时间的时区，避免混用 naive/aware 时间戳。
+        """
+        cache_ts = pd.Timestamp(cache_max_ts)
+        current_ts = pd.Timestamp(current_ts)
+        if cache_ts.tzinfo is None and current_ts.tzinfo is not None:
+            cache_ts = cache_ts.tz_localize(current_ts.tzinfo)
+        elif cache_ts.tzinfo is not None and current_ts.tzinfo is None:
+            current_ts = current_ts.tz_localize(cache_ts.tzinfo)
+        return cache_ts, current_ts
 
     def _submit_single_order(self, order_info: dict):
         """
