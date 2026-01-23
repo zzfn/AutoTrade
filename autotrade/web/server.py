@@ -27,6 +27,7 @@ from lumibot.traders import Trader
 
 from autotrade.alpha_strategy import AlphaStrategy
 from autotrade.ml import ModelManager
+from autotrade.utils.timezone import format_et_time
 from autotrade.web.backtest_tasks import create_task, get_task, init_db, run_worker_loop
 
 

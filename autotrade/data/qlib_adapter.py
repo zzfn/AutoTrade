@@ -6,7 +6,7 @@ Provides data management and storage capabilities for ML training.
 
 Storage Format: Parquet
 - File naming: {SYMBOL}_{INTERVAL}.parquet (e.g., AAPL_5MIN.parquet)
-- Directory: datasets/{interval}/
+- Directory: datasets/
 """
 
 from datetime import datetime
@@ -29,9 +29,9 @@ class QlibDataAdapter:
     2. Data management (fetch, store, load)
 
     Storage Format (Parquet):
-    - datasets/5min/AAPL_5MIN.parquet
-    - datasets/5min/MSFT_5MIN.parquet
-    - datasets/1d/AAPL_1D.parquet
+    - datasets/AAPL_5MIN.parquet
+    - datasets/MSFT_5MIN.parquet
+    - datasets/AAPL_1D.parquet
 
     Lumibot's `get_historical_prices` returns a Bars object with a DataFrame
     that may have different column naming conventions and index structures.
@@ -88,15 +88,14 @@ class QlibDataAdapter:
         Args:
             data_dir: Directory for data storage (used for fetch/store/load operations)
             provider: Data provider instance (auto-created if None)
-            interval: Data frequency ('1d', '1h', '1min', '5min')
+            interval: Data frequency ('1d', '1h', '1min', '5min') - 用于文件命名
             fill_missing: Whether to forward-fill missing values (for transform)
             validate: Whether to validate the output DataFrame (for transform)
         """
         # Data management attributes
         self.interval = interval
-        self.base_dir = Path(data_dir)
-        self.data_dir = self.base_dir / interval
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.data_dir = Path(data_dir)
+        # 不再自动创建目录，只在需要时创建
 
         # Data provider
         self._provider = provider
@@ -216,6 +215,9 @@ class QlibDataAdapter:
             df: DataFrame with OHLCV data
             update_mode: 'replace' or 'append'
         """
+        # 确保目录存在（只在真正存储数据时创建）
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+
         # Generate filename: AAPL_5MIN.parquet
         filename = f"{symbol}_{self.interval_suffix}.parquet"
         filepath = self.data_dir / filename

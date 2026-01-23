@@ -88,19 +88,7 @@ outputs/backtests/*
 !outputs/**/.gitkeep
 
 # 数据目录 (datasets/)
-datasets/*
-!datasets/.gitkeep
-# 保留子目录结构
-!datasets/raw/
-!datasets/processed/
-!datasets/cache/
-# 忽略子目录内容
-datasets/raw/*
-!datasets/raw/.gitkeep
-datasets/processed/*
-!datasets/processed/.gitkeep
-datasets/cache/*
-!datasets/cache/.gitkeep
+# 不再忽略 datasets，允许提交 Parquet 数据文件
 
 # Notebooks
 .ipynb_checkpoints
