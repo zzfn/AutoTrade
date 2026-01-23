@@ -164,7 +164,7 @@ def initialize_and_start() -> dict:
 
         # 3. Load symbols and interval from config
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        config_path = os.path.join(base_dir, "../../configs/qlib_ml_config.yaml")
+        config_path = os.path.join(base_dir, "../config.yaml")
         symbols = ["SPY", "QQQ", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA"]  # Default
         interval = "1min"  # Default
         lookback_period = 2  # Default
@@ -712,10 +712,11 @@ def start_model_training_internal(config: dict = None) -> dict:
 
             # 默认配置（优先从 YAML 配置文件读取）
             base_dir = os.path.dirname(os.path.abspath(__file__))
-            config_path = os.path.join(base_dir, "../../configs/qlib_ml_config.yaml")
+            config_path = os.path.join(base_dir, "../config.yaml")
 
             yaml_interval = None
             yaml_target_horizon = 60
+            yaml_valid_bars = None
 
             if os.path.exists(config_path):
                 try:
@@ -725,6 +726,8 @@ def start_model_training_internal(config: dict = None) -> dict:
                             if "data" in yaml_config:
                                 if "interval" in yaml_config["data"]:
                                     yaml_interval = yaml_config["data"]["interval"]
+                                if "valid_bars" in yaml_config["data"]:
+                                    yaml_valid_bars = yaml_config["data"]["valid_bars"]
                             if "model" in yaml_config and "target_horizon" in yaml_config["model"]:
                                 yaml_target_horizon = yaml_config["model"]["target_horizon"]
                             if "rolling_update" in yaml_config:
@@ -741,6 +744,10 @@ def start_model_training_internal(config: dict = None) -> dict:
             num_bars = 20000
             target_horizon = train_config.get("target_horizon", yaml_target_horizon)
             interval = train_config.get("interval", yaml_interval or "1min")
+            min_valid_bars = train_config.get(
+                "valid_bars",
+                yaml_valid_bars if yaml_valid_bars is not None else MIN_BARS_REQUIRED,
+            )
 
             # 1. 加载数据 (20%)
             training_status["progress"] = 10
@@ -774,9 +781,30 @@ def start_model_training_internal(config: dict = None) -> dict:
             
             # 记录实际获取的数据量
             log_message(f"加载数据完成: {len(df)} 根K线 (目标: {num_bars}, interval: {interval}, days: {days_needed})")
+            if df.empty or len(df) < min_valid_bars:
+                training_status["message"] = (
+                    f"数据不足（{len(df)}/{min_valid_bars}），自动同步数据..."
+                )
+                log_message(
+                    f"⚠️ 数据不足（{len(df)}/{min_valid_bars}），自动触发同步"
+                )
+                try:
+                    adapter.fetch_and_store(
+                        symbols, start_date, end_date, update_mode="append"
+                    )
+                except Exception as e:
+                    log_message(f"自动同步数据失败: {e}")
+
+                df = adapter.load_data(symbols, start_date, end_date)
+                training_status["progress"] = 20
+                log_message(f"同步后数据量: {len(df)} 根K线")
 
             if df.empty:
                 raise ValueError("没有可用的数据")
+            if len(df) < min_valid_bars:
+                log_message(
+                    f"⚠️ 同步后数据仍不足（{len(df)}/{min_valid_bars}），继续训练"
+                )
 
             # 裁剪到最新的 num_bars 根K线
             if len(df) > num_bars:
@@ -1069,7 +1097,7 @@ def start_data_sync_internal(config: dict = None) -> dict:
             log_message("开始数据同步")
 
             base_dir = os.path.dirname(os.path.abspath(__file__))
-            config_path = os.path.join(base_dir, "../../configs/qlib_ml_config.yaml")
+            config_path = os.path.join(base_dir, "../config.yaml")
 
             yaml_interval = None
             yaml_num_bars = 20000
@@ -1380,7 +1408,7 @@ async def get_data_config():
     """获取数据配置（标的池、频率等）"""
     try:
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        config_path = os.path.join(base_dir, "../../configs/qlib_ml_config.yaml")
+        config_path = os.path.join(base_dir, "../config.yaml")
 
         # 默认配置
         config = {
@@ -1559,7 +1587,7 @@ def run_strategy_main() -> dict:
         
         # 3. 从配置加载 symbols 和 interval
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        config_path = os.path.join(base_dir, "../../configs/qlib_ml_config.yaml")
+        config_path = os.path.join(base_dir, "../config.yaml")
         symbols = ["SPY", "QQQ", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA"]
         interval = "1min"
         lookback_period = 2

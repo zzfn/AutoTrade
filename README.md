@@ -190,13 +190,9 @@ autotrade/
 ├── web/                  # Web 服务器
 │   └── server.py
 ├── trade_manager.py      # 交易管理器
-
-configs/
-├── universe.yaml         # 股票池配置
-└── qlib_ml_config.yaml   # ML 策略配置
-
-models/                   # 训练好的模型
-datasets/                # Qlib 格式数据
+├── config.yaml           # ML 策略配置
+├── models/               # 训练好的模型
+└── datasets/             # Qlib 格式数据
 ```
 
 ## 开发
