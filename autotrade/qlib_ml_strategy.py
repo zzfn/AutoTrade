@@ -300,9 +300,13 @@ class QlibMLStrategy(Strategy):
 
         # Batch fetch historical data for all assets
         # Fetch 1-minute data and aggregate to 5-minute (bypass Lumibot's buggy timestep mapping)
+        # lookback_period is in days; convert to 1-min bars to ensure enough samples.
+        bars_per_day = 390
+        min_required_bars = 30 * 5
+        requested_bars = max(int(self.lookback_period * bars_per_day), min_required_bars)
         try:
             histories = self.get_historical_prices_for_assets(
-                assets, self.lookback_period * 5, 'minute'  # Request 5x more 1-min bars
+                assets, requested_bars, "minute"
             )
         except Exception as e:
             self.log_message(f"Failed to fetch batch history: {e}")

@@ -194,7 +194,7 @@ def _execute_backtest(params: dict[str, Any], log_fn: Callable[[str], None]) -> 
     if not symbols:
         symbols = ["SPY"]
 
-    interval = "5min"
+    interval = str(params.get("interval", "5min")).lower()
     log_fn(
         f"Backtesting {symbols} from {backtesting_start} to {backtesting_end} (Interval: {interval})"
     )
@@ -202,7 +202,26 @@ def _execute_backtest(params: dict[str, Any], log_fn: Callable[[str], None]) -> 
     strategy_class = QlibMLStrategy
     model_manager = ModelManager()
 
-    lumibot_interval = "minute"
+    # Lumibot time_unit uses base units; 5min/15min still use "minute"
+    if "hour" in interval or interval.endswith("h"):
+        lumibot_interval = "hour"
+    elif "day" in interval or interval.endswith("d"):
+        lumibot_interval = "day"
+    else:
+        lumibot_interval = "minute"
+
+    # Convert interval to sleeptime string (e.g., "5min" -> "5M")
+    sleeptime = "5M"
+    if interval.endswith("min"):
+        sleeptime = f"{interval.replace('min', '').strip()}M"
+    elif interval.endswith("m"):
+        sleeptime = f"{interval[:-1]}M"
+    elif interval.endswith("hour") or interval.endswith("h"):
+        value = interval.replace("hour", "").replace("h", "").strip()
+        sleeptime = f"{value}H" if value else "1H"
+    elif interval.endswith("day") or interval.endswith("d"):
+        value = interval.replace("day", "").replace("d", "").strip()
+        sleeptime = f"{value}D" if value else "1D"
 
     model_name = params.get("model_name")
     if not model_name:
@@ -212,8 +231,10 @@ def _execute_backtest(params: dict[str, Any], log_fn: Callable[[str], None]) -> 
         "symbols": symbols,
         "model_name": model_name,
         "top_k": params.get("top_k", 3),
-        "sleeptime": "0S",
-        "timestep": "5M",
+        "sleeptime": sleeptime,
+        "timestep": sleeptime,
+        "interval": interval,
+        "lookback_period": params.get("lookback_period", 2),
     }
 
     benchmark = "SPY" if len(symbols) > 1 or symbols[0] != "SPY" else symbols[0]
