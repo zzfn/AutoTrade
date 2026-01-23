@@ -12,7 +12,7 @@ from lumibot.backtesting import AlpacaBacktesting
 
 from autotrade.core.config import config
 from autotrade.ml import ModelManager
-from autotrade.strategies import QlibMLStrategy
+from autotrade.qlib_ml_strategy import QlibMLStrategy
 
 
 _DB_FILENAME = "backtest_tasks.sqlite"
