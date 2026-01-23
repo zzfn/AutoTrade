@@ -4,6 +4,7 @@
 <script type="text/babel">
   // Portfolio History Chart Component
   const PortfolioHistoryChart = () => {
+    const { data, status: connectionStatus } = useWebSocket(getWsUrl());
     const [historyData, setHistoryData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
@@ -192,10 +193,48 @@
 
     return (
       <Card title="资金趋势" className="col-span-1 md:col-span-3">
-        {/* 控制栏 */}
-        <div className="flex flex-wrap gap-3 mb-4">
-          {/* 时间范围选择 */}
-          <div className="flex gap-2">
+        {/* 顶部状态栏和控制栏 */}
+        <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
+          {/* 状态信息 */}
+          <div className="flex flex-wrap gap-3">
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-800/30 rounded-lg border border-slate-700/30">
+              <span className="text-slate-400 text-xs">代理状态</span>
+              <StatusBadge status={data?.status} />
+            </div>
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-800/30 rounded-lg border border-slate-700/30">
+              <span className="text-slate-400 text-xs">市场状态</span>
+              <span
+                className={`text-xs font-bold px-2 py-0.5 rounded border ${
+                  data?.market_status === "open"
+                    ? "bg-green-500/10 text-green-400 border-green-500/20"
+                    : ["pre_market", "after_hours"].includes(data?.market_status)
+                      ? "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                      : "bg-slate-500/10 text-slate-400 border-slate-500/20"
+                }`}
+              >
+                {data?.market_status === "open"
+                  ? "开盘中"
+                  : data?.market_status === "pre_market"
+                    ? "盘前交易"
+                    : data?.market_status === "after_hours"
+                      ? "盘后交易"
+                      : data?.market_status === "closed"
+                        ? "已休市"
+                        : "未知"}
+              </span>
+            </div>
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-800/30 rounded-lg border border-slate-700/30">
+              <span className="text-slate-400 text-xs">系统时间</span>
+              <span className="text-xs font-mono text-slate-300">
+                {formatETTimeShort(new Date())}
+              </span>
+            </div>
+          </div>
+
+          {/* 控制按钮 */}
+          <div className="flex flex-wrap gap-2">
+            {/* 时间范围选择 */}
+            <div className="flex gap-2">
             <button
               className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
                 period === "1D"
@@ -249,6 +288,63 @@
           >
             {loading ? "加载中..." : "刷新"}
           </button>
+          </div>
+        </div>
+
+        {/* 投资组合概览 - 在图表上方显示 */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+          <div className="bg-slate-800/30 p-4 rounded-lg border border-slate-700/30">
+            <div className="text-slate-400 text-[10px] font-medium uppercase tracking-wider mb-1">
+              总权益
+            </div>
+            <div className="text-xl font-bold text-slate-100">
+              {historyData && historyData.length > 0 ? (
+                `$${historyData[historyData.length - 1]?.equity?.toFixed(2) || '-'}`
+              ) : '-'}
+            </div>
+          </div>
+          <div className="bg-slate-800/30 p-4 rounded-lg border border-slate-700/30">
+            <div className="text-slate-400 text-[10px] font-medium uppercase tracking-wider mb-1">
+              日内盈亏
+            </div>
+            <div className="text-xl font-bold">
+              {historyData && historyData.length > 1 ? (
+                (() => {
+                  const latest = historyData[historyData.length - 1]?.equity || 0;
+                  const base = historyData[0]?.base_value || historyData[0]?.equity || 0;
+                  const pl = latest - base;
+                  const plClass = pl >= 0 ? 'text-emerald-400' : 'text-rose-400';
+                  return <span className={plClass}>{pl >= 0 ? '+' : ''}${pl.toFixed(2)}</span>;
+                })()
+              ) : '-'}
+            </div>
+          </div>
+          <div className="bg-slate-800/30 p-4 rounded-lg border border-slate-700/30">
+            <div className="text-slate-400 text-[10px] font-medium uppercase tracking-wider mb-1">
+              日内收益率
+            </div>
+            <div className="text-xl font-bold">
+              {historyData && historyData.length > 1 ? (
+                (() => {
+                  const latest = historyData[historyData.length - 1]?.equity || 0;
+                  const base = historyData[0]?.base_value || historyData[0]?.equity || 0;
+                  const plPercent = base > 0 ? ((latest - base) / base) * 100 : 0;
+                  const plClass = plPercent >= 0 ? 'text-emerald-400' : 'text-rose-400';
+                  return <span className={plClass}>{plPercent >= 0 ? '+' : ''}{plPercent.toFixed(2)}%</span>;
+                })()
+              ) : '-'}
+            </div>
+          </div>
+          <div className="bg-slate-800/30 p-4 rounded-lg border border-slate-700/30">
+            <div className="text-slate-400 text-[10px] font-medium uppercase tracking-wider mb-1">
+              基准值
+            </div>
+            <div className="text-xl font-bold text-slate-400">
+              {historyData && historyData.length > 0 ? (
+                `$${historyData[0]?.base_value?.toFixed(2) || '-'}`
+              ) : '-'}
+            </div>
+          </div>
         </div>
 
         {/* 图表容器 */}
@@ -289,92 +385,7 @@
 
     return (
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 fade-in">
-        {/* Control Panel */}
-        <Card title="控制面板" className="col-span-1">
-          <div className="flex flex-col gap-5">
-            <div className="flex justify-between items-center p-3 bg-slate-800/30 rounded-lg border border-slate-700/30">
-              <span className="text-slate-400 text-sm">代理状态</span>
-              <StatusBadge status={data.status} />
-            </div>
-            <div className="flex justify-between items-center p-3 bg-slate-800/30 rounded-lg border border-slate-700/30 mt-2">
-              <span className="text-slate-400 text-sm">市场状态</span>
-              <span
-                className={`text-xs font-bold px-2 py-1 rounded border ${
-                  data.market_status === "open"
-                    ? "bg-green-500/10 text-green-400 border-green-500/20"
-                    : ["pre_market", "after_hours"].includes(data.market_status)
-                      ? "bg-amber-500/10 text-amber-400 border-amber-500/20"
-                      : "bg-slate-500/10 text-slate-400 border-slate-500/20"
-                }`}
-              >
-                {data.market_status === "open"
-                  ? "开盘中"
-                  : data.market_status === "pre_market"
-                    ? "盘前交易"
-                    : data.market_status === "after_hours"
-                      ? "盘后交易"
-                      : data.market_status === "closed"
-                        ? "已休市"
-                        : "未知"}
-              </span>
-            </div>
-            <div className="flex justify-between items-center text-xs text-slate-500 px-1 mt-2">
-              <span>系统时间</span>
-              <span className="font-mono">
-                {formatETTimeShort(new Date())}
-              </span>
-            </div>
-            {/* Start/Stop buttons removed as strategy auto-start is enabled */}
-          </div>
-        </Card>
-
-        {/* Portfolio Summary */}
-        <Card title="投资组合概览" className="col-span-1 md:col-span-2">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="bg-slate-800/30 p-5 rounded-xl border border-slate-700/30 flex flex-col justify-between">
-              <div className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1">
-                总权益
-              </div>
-              <div className="text-2xl font-bold text-slate-100 mt-1">
-                <AnimatedNumber
-                  value={data.portfolio.value}
-                  decimals={2}
-                  prefix="$"
-                />
-              </div>
-            </div>
-            <div className="bg-slate-800/30 p-5 rounded-xl border border-slate-700/30 flex flex-col justify-between">
-              <div className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1">
-                现金
-              </div>
-              <div className="text-2xl font-bold text-cyan-400 mt-1">
-                <AnimatedNumber
-                  value={data.portfolio.cash}
-                  decimals={2}
-                  prefix="$"
-                />
-              </div>
-            </div>
-            <div className="bg-slate-800/30 p-5 rounded-xl border border-slate-700/30 flex flex-col justify-between">
-              <div className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1">
-                持仓数量
-              </div>
-              <div className="text-2xl font-bold text-purple-400 mt-1">
-                {data.portfolio.positions.length}
-              </div>
-            </div>
-            <div className="bg-slate-800/30 p-5 rounded-xl border border-slate-700/30 flex flex-col justify-between">
-              <div className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1">
-                最后更新
-              </div>
-              <div className="text-sm font-mono text-slate-300 mt-1">
-                {formatETTimeShort(data.last_update)}
-              </div>
-            </div>
-          </div>
-        </Card>
-
-        {/* Portfolio History Chart */}
+        {/* Portfolio History Chart - 已整合控制面板和投资组合概览 */}
         <PortfolioHistoryChart />
 
         {/* ML Prediction Signals */}
