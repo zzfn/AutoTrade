@@ -268,17 +268,22 @@ class LightGBMTrainer(ModelTrainer):
         ).sort_values("importance", ascending=False)
 
         # 更新元数据
+        best_iteration = (
+            self.model.best_iteration
+            if self.model.best_iteration and self.model.best_iteration > 0
+            else self.model.current_iteration()
+        )
         self.metadata.update(
             {
                 "train_samples": len(X_train),
                 "num_features": len(X_train.columns),
-                "best_iteration": self.model.best_iteration,
+                "best_iteration": best_iteration,
                 "params": self.params,
                 "feature_names": list(X_train.columns),
             }
         )
 
-        logger.info(f"训练完成，最佳迭代: {self.model.best_iteration}")
+        logger.info(f"训练完成，最佳迭代: {best_iteration}")
         return self
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
@@ -294,7 +299,12 @@ class LightGBMTrainer(ModelTrainer):
         if self.model is None:
             raise ValueError("模型未训练或未加载")
 
-        return self.model.predict(X, num_iteration=self.model.best_iteration)
+        best_iteration = (
+            self.model.best_iteration
+            if self.model.best_iteration and self.model.best_iteration > 0
+            else self.model.current_iteration()
+        )
+        return self.model.predict(X, num_iteration=best_iteration)
 
     def get_feature_importance(self, top_n: int = 20) -> pd.DataFrame:
         """获取 Top-N 特征重要性"""
