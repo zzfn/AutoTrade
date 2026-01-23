@@ -10,11 +10,10 @@ import numpy as np
 import pandas as pd
 from lumibot.strategies.strategy import Strategy
 from lumibot.entities import Asset
-from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 
 # Import from new module locations
 from autotrade.ml import QlibFeatureGenerator, LightGBMTrainer, ModelManager
-from autotrade.ml.inference import ModelInference, get_inference_engine
+from autotrade.ml.inference import ModelInference
 from autotrade.data import lumibot_to_qlib
 
 
@@ -133,29 +132,9 @@ class QlibMLStrategy(Strategy):
         if self.position_sizing not in ("equal", "weighted"):
             self.position_sizing = "equal"
         
-        # Data frequency: Alpaca supports 'minute', '5 minutes', '15 minutes', 
+        # Data frequency: Alpaca supports 'minute', '5 minutes', '15 minutes',
         # '30 minutes', 'hour', '2 hours', '4 hours', 'day'
         self.interval = self.parameters.get("interval", "minute")
-        # Map common shorthand formats to Alpaca-compatible timestep
-        interval_mapping = {
-            "1min": "minute",
-            "1m": "minute",
-            "5min": "5 minutes",
-            "5m": "5 minutes",
-            "10min": "10 minutes",
-            "15min": "15 minutes",
-            "15m": "15 minutes",
-            "30min": "30 minutes",
-            "30m": "30 minutes",
-            "1h": "hour",
-            "1hour": "hour",
-            "2h": "2 hours",
-            "4h": "4 hours",
-            "1d": "day",
-            "1day": "day",
-        }
-        if self.interval in interval_mapping:
-            self.interval = interval_mapping[self.interval]
         
         # Create TimeFrame object for 5-minute data (bypass Lumibot's buggy TIMESTEP_MAPPING)
         # Lumibot's "5 minutes" maps to "51Min" instead of "5Min" due to a bug
