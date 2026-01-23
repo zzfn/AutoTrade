@@ -81,6 +81,7 @@
     useEffect(() => {
       if (!taskId) return;
       let active = true;
+      let timer = null;
       const fetchTask = async () => {
         try {
           const res = await fetch(`/api/backtest/tasks/${taskId}`);
@@ -88,23 +89,31 @@
           if (!active) return;
           if (payload.error) {
             setTaskError(payload.error);
+            // 发生错误时停止轮询
+            if (timer) clearInterval(timer);
             return;
           }
           setTaskStatus(payload.status);
           setTaskLogs(payload.logs || []);
           setTaskResult(payload.result || null);
           setTaskError(payload.error_message || null);
+
+          // 任务完成时停止轮询
+          if (payload.status === "completed" || payload.status === "failed" || payload.status === "cancelled") {
+            if (timer) clearInterval(timer);
+          }
         } catch (e) {
           if (active) {
             setTaskError("获取回测状态失败");
+            if (timer) clearInterval(timer);
           }
         }
       };
       fetchTask();
-      const timer = setInterval(fetchTask, 1000);
+      timer = setInterval(fetchTask, 1000);
       return () => {
         active = false;
-        clearInterval(timer);
+        if (timer) clearInterval(timer);
       };
     }, [taskId]);
 
