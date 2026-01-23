@@ -137,7 +137,7 @@ class AlphaStrategy(Strategy):
 
         # Other parameters
         self.model_name = self.parameters.get("model_name")
-        self.top_k = self.parameters.get("top_k", 3)
+        self.top_k = self.parameters.get("top_k", 4)
         self.lookback_period = self.parameters.get("lookback_period", 60)
         self.sleeptime = self.parameters.get("sleeptime", "1D")
         self.models_dir = self.parameters.get("models_dir", "models")

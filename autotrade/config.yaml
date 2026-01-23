@@ -25,5 +25,5 @@ model:
 
 # 策略配置
 strategy:
-  top_k: 3               # 持仓股票数量
+  top_k: 4               # 持仓股票数量
   sleeptime: "1M"        # 交易间隔（1M=1分钟, 1H=1小时, 1D=1天）

@@ -308,11 +308,10 @@
               日内盈亏
             </div>
             <div className="text-xl font-bold">
-              {historyData && historyData.length > 1 ? (
+              {historyData && historyData.length > 0 ? (
                 (() => {
-                  const latest = historyData[historyData.length - 1]?.equity || 0;
-                  const base = historyData[0]?.base_value || historyData[0]?.equity || 0;
-                  const pl = latest - base;
+                  // 使用 Alpaca 返回的 profit_loss 字段，确保和官网一致
+                  const pl = historyData[historyData.length - 1]?.profit_loss ?? 0;
                   const plClass = pl >= 0 ? 'text-emerald-400' : 'text-rose-400';
                   return <span className={plClass}>{pl >= 0 ? '+' : ''}${pl.toFixed(2)}</span>;
                 })()
@@ -324,11 +323,10 @@
               日内收益率
             </div>
             <div className="text-xl font-bold">
-              {historyData && historyData.length > 1 ? (
+              {historyData && historyData.length > 0 ? (
                 (() => {
-                  const latest = historyData[historyData.length - 1]?.equity || 0;
-                  const base = historyData[0]?.base_value || historyData[0]?.equity || 0;
-                  const plPercent = base > 0 ? ((latest - base) / base) * 100 : 0;
+                  // 使用 Alpaca 返回的 profit_loss_pct 字段，确保和官网一致
+                  const plPercent = historyData[historyData.length - 1]?.profit_loss_pct ?? 0;
                   const plClass = plPercent >= 0 ? 'text-emerald-400' : 'text-rose-400';
                   return <span className={plClass}>{plPercent >= 0 ? '+' : ''}{plPercent.toFixed(2)}%</span>;
                 })()
@@ -337,7 +335,7 @@
           </div>
           <div className="bg-slate-800/30 p-4 rounded-lg border border-slate-700/30">
             <div className="text-slate-400 text-[10px] font-medium uppercase tracking-wider mb-1">
-              基准值
+              初始权益
             </div>
             <div className="text-xl font-bold text-slate-400">
               {historyData && historyData.length > 0 ? (
