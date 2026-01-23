@@ -104,3 +104,6 @@ datasets/cache/*
 
 # Notebooks
 .ipynb_checkpoints
+
+# 运行时数据目录 (data/)
+data/*
