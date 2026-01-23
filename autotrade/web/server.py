@@ -700,7 +700,7 @@ def start_model_training_internal(config: dict = None) -> dict:
 
     def _training_task():
         try:
-            from autotrade.research.data import QlibDataAdapter
+            from autotrade.data import QlibDataAdapter
             from autotrade.ml import QlibFeatureGenerator, LightGBMTrainer
             import pandas as pd
             import numpy as np
@@ -717,6 +717,7 @@ def start_model_training_internal(config: dict = None) -> dict:
             yaml_interval = None
             yaml_target_horizon = 60
             yaml_valid_bars = None
+            yaml_num_bars = None
 
             if os.path.exists(config_path):
                 try:
@@ -728,6 +729,8 @@ def start_model_training_internal(config: dict = None) -> dict:
                                     yaml_interval = yaml_config["data"]["interval"]
                                 if "valid_bars" in yaml_config["data"]:
                                     yaml_valid_bars = yaml_config["data"]["valid_bars"]
+                                if "num_bars" in yaml_config["data"]:
+                                    yaml_num_bars = yaml_config["data"]["num_bars"]
                             if "model" in yaml_config and "target_horizon" in yaml_config["model"]:
                                 yaml_target_horizon = yaml_config["model"]["target_horizon"]
                             if "rolling_update" in yaml_config:
@@ -740,8 +743,8 @@ def start_model_training_internal(config: dict = None) -> dict:
 
             train_config = config or {}
             symbols = train_config.get("symbols", ["SPY", "AAPL", "MSFT"])
-            # 写死 num_bars = 20000，确保 Walk-Forward 验证能正常执行
-            num_bars = 20000
+            # 默认读取配置中的 num_bars，避免多标的时全局裁剪过度
+            num_bars = train_config.get("num_bars", yaml_num_bars or 20000)
             target_horizon = train_config.get("target_horizon", yaml_target_horizon)
             interval = train_config.get("interval", yaml_interval or "1min")
             min_valid_bars = train_config.get(
@@ -806,11 +809,22 @@ def start_model_training_internal(config: dict = None) -> dict:
                     f"⚠️ 同步后数据仍不足（{len(df)}/{min_valid_bars}），继续训练"
                 )
 
-            # 裁剪到最新的 num_bars 根K线
+            # 裁剪到每个标的最新的 num_bars 根K线
             if len(df) > num_bars:
-                df = df.iloc[-num_bars:]
-                training_status["message"] = f"加载数据 ({interval}) - 已裁剪到 {num_bars} 根K线"
-                log_message(f"数据已裁剪到 {num_bars} 根K线")
+                if isinstance(df.index, pd.MultiIndex):
+                    df = (
+                        df.groupby(level="symbol", group_keys=False)
+                        .tail(num_bars)
+                        .sort_index()
+                    )
+                    training_status["message"] = (
+                        f"加载数据 ({interval}) - 每标的裁剪到 {num_bars} 根K线"
+                    )
+                    log_message(f"数据已按标的裁剪到 {num_bars} 根K线")
+                else:
+                    df = df.iloc[-num_bars:]
+                    training_status["message"] = f"加载数据 ({interval}) - 已裁剪到 {num_bars} 根K线"
+                    log_message(f"数据已裁剪到 {num_bars} 根K线")
             else:
                 log_message(f"⚠️ 实际数据量 {len(df)} 少于目标 {num_bars}，使用全部数据")
 
@@ -1088,7 +1102,7 @@ def start_data_sync_internal(config: dict = None) -> dict:
 
     def _data_sync_task():
         try:
-            from autotrade.research.data import QlibDataAdapter
+            from autotrade.data import QlibDataAdapter
             import pandas as pd
 
             data_sync_status["in_progress"] = True

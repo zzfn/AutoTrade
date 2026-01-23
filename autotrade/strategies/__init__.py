@@ -5,6 +5,6 @@ This module contains trading strategies:
 - qlib_strat: ML-driven trading strategy using Qlib
 """
 
-from .qlib_strat import QlibMLStrategy
+from autotrade.qlib_strat import QlibMLStrategy
 
 __all__ = ["QlibMLStrategy"]

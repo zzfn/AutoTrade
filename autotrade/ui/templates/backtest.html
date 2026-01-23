@@ -5,13 +5,14 @@
 <script type="text/babel">
   const Backtest = () => {
     const [params, setParams] = useState({
-      start_date: "2025-01-01",
+      start_date: "2025-12-01",
       end_date: "2025-12-31",
       strategy_type: "qlib_ml",
       symbol: "AAPL,MSFT,GOOGL,AMZN,NVDA,META,TSLA",
       model_name: "",
       top_k: 3,
       interval: "5min",  // 默认 5 分钟（与配置文件一致）
+      num_bars: 20000,
     });
     const [models, setModels] = useState([]);
     const [loading, setLoading] = useState(false);
@@ -32,6 +33,26 @@
         }
       };
       fetchModels();
+    }, []);
+
+    useEffect(() => {
+      const fetchDataConfig = async () => {
+        try {
+          const res = await fetch("/api/data/config");
+          const data = await res.json();
+          const dataConfig = data?.config || {};
+          const symbols = dataConfig.symbols || [];
+          setParams((prev) => ({
+            ...prev,
+            symbol: symbols.length > 0 ? symbols.join(",") : prev.symbol,
+            interval: dataConfig.interval || prev.interval,
+            num_bars: dataConfig.num_bars || prev.num_bars,
+          }));
+        } catch (e) {
+          console.error("Failed to fetch data config", e);
+        }
+      };
+      fetchDataConfig();
     }, []);
 
     const runBacktest = async () => {
@@ -150,7 +171,15 @@
                 数据频率
               </label>
               <div className="w-full bg-slate-900/50 border border-slate-700/50 rounded-lg p-2.5 text-slate-500 text-sm">
-                5分钟线 (5 Min) - 固定设置
+                {params.interval} - 固定设置
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-400 mb-1.5">
+                历史K线数量
+              </label>
+              <div className="w-full bg-slate-900/50 border border-slate-700/50 rounded-lg p-2.5 text-slate-500 text-sm">
+                {params.num_bars}
               </div>
             </div>
             <div>
