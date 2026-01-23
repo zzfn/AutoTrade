@@ -454,6 +454,22 @@
                       </div>
                     </div>
                   </div>
+                  {model.metadata?.walk_forward_validation?.enabled && (
+                    <div className="text-xs text-slate-500 mb-3 space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span>WF IC</span>
+                        <span className="font-mono text-emerald-400">
+                          {(model.metadata.walk_forward_validation.ic_mean || 0).toFixed(4)} ± {(model.metadata.walk_forward_validation.ic_std || 0).toFixed(4)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span>WF ICIR</span>
+                        <span className="font-mono text-purple-300">
+                          {(model.metadata.walk_forward_validation.icir_mean || 0).toFixed(2)} ± {(model.metadata.walk_forward_validation.icir_std || 0).toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                  )}
 
                   <div className="text-xs text-slate-500 mb-3">
                     {model.saved_at
@@ -519,6 +535,22 @@
                     {(selectedModel.metrics?.icir || 0).toFixed(2)}
                   </div>
                 </div>
+                {selectedModel.metadata?.walk_forward_validation?.enabled && (
+                  <div className="bg-slate-800/50 rounded-xl p-4">
+                    <div className="text-xs text-slate-500 mb-1">WF IC</div>
+                    <div className="text-2xl font-bold text-emerald-400">
+                      {(selectedModel.metadata.walk_forward_validation.ic_mean || 0).toFixed(4)} ± {(selectedModel.metadata.walk_forward_validation.ic_std || 0).toFixed(4)}
+                    </div>
+                  </div>
+                )}
+                {selectedModel.metadata?.walk_forward_validation?.enabled && (
+                  <div className="bg-slate-800/50 rounded-xl p-4">
+                    <div className="text-xs text-slate-500 mb-1">WF ICIR</div>
+                    <div className="text-2xl font-bold text-purple-400">
+                      {(selectedModel.metadata.walk_forward_validation.icir_mean || 0).toFixed(2)} ± {(selectedModel.metadata.walk_forward_validation.icir_std || 0).toFixed(2)}
+                    </div>
+                  </div>
+                )}
                 <div className="bg-slate-800/50 rounded-xl p-4">
                   <div className="text-xs text-slate-500 mb-1">样本数</div>
                   <div className="text-2xl font-bold text-cyan-400">
