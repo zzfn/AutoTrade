@@ -107,3 +107,4 @@ datasets/cache/*
 
 # 运行时数据目录 (data/)
 data/*
+backtest_tasks.sqlite
