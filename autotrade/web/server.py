@@ -9,6 +9,7 @@ import asyncio
 import logging
 import os
 import threading
+import multiprocessing
 import yaml
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
@@ -21,7 +22,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from lumibot.backtesting import YahooDataBacktesting
+from lumibot.backtesting import AlpacaBacktesting
 from lumibot.brokers import Alpaca
 from lumibot.traders import Trader
 
@@ -240,142 +241,129 @@ def initialize_and_start() -> dict:
         return {"status": "error", "message": str(e)}
 
 
-def run_backtest(params: dict) -> dict:
-    """Run a backtest in a separate thread."""
+def _backtest_task(params: dict) -> None:
+    try:
+        log_message("Starting backtest...")
 
-    def _backtest_task():
+        # 1. Parse dates
+        backtesting_start = datetime.strptime(
+            params.get("start_date", "2023-01-01"), "%Y-%m-%d"
+        )
+        backtesting_end = datetime.strptime(
+            params.get("end_date", "2023-01-31"), "%Y-%m-%d"
+        )
+
+        # 2. Parse symbols (clean up quotes and spaces)
+        symbol_input = params.get("symbol", "SPY")
+        symbols = [
+            s.strip().replace('"', "").replace("'", "")
+            for s in symbol_input.split(",")
+            if s.strip()
+        ]
+        if not symbols:
+            symbols = ["SPY"]
+
+        # 3. 固定使用 5 分钟回测
+        interval = "5min"
+
+        log_message(
+            f"Backtesting {symbols} from {backtesting_start} to {backtesting_end} (Interval: {interval})"
+        )
+
+        # 4. Execute backtest with ML strategy
+        strategy_class = QlibMLStrategy
+
         try:
-            log_message("Starting backtest...")
+            lumibot_interval = "minute"
 
-            # 1. Parse dates
-            backtesting_start = datetime.strptime(
-                params.get("start_date", "2023-01-01"), "%Y-%m-%d"
+            # 如果未指定模型，使用当前最优模型
+            model_name = params.get("model_name", ml_config.get("model_name"))
+            if model_name is None:
+                model_name = model_manager.get_current_model()
+
+            backtest_params = {
+                "symbols": symbols,
+                "model_name": model_name,
+                "top_k": params.get("top_k", ml_config.get("top_k", 3)),
+                "sleeptime": "0S",
+                "timestep": "5M",
+            }
+
+            # If multiple symbols, use SPY as benchmark for better clarity
+            benchmark = (
+                "SPY" if len(symbols) > 1 or symbols[0] != "SPY" else symbols[0]
             )
-            backtesting_end = datetime.strptime(
-                params.get("end_date", "2023-01-31"), "%Y-%m-%d"
+
+            # Start time to identify new files
+            start_time = datetime.now()
+
+            # 使用 AlpacaBacktesting（与数据中心数据源一致）
+            api_key = os.getenv("ALPACA_API_KEY")
+            api_secret = os.getenv("ALPACA_API_SECRET")
+            paper_trading = os.getenv("ALPACA_PAPER", "True").lower() == "true"
+
+            if not api_key or not api_secret:
+                raise ValueError("缺少 Alpaca API 凭证，请设置 ALPACA_API_KEY 和 ALPACA_API_SECRET 环境变量")
+
+            alpaca_config = {
+                "API_KEY": api_key,
+                "API_SECRET": api_secret,
+                "PAPER": paper_trading,
+            }
+
+            strategy_class.backtest(
+                AlpacaBacktesting,
+                backtesting_start,
+                backtesting_end,
+                config=alpaca_config,
+                benchmark_asset=benchmark,
+                parameters=backtest_params,
+                time_unit=lumibot_interval,
+                api_key=api_key,
+                api_secret=api_secret,
+                show_progress_bar=True,
             )
 
-            # 2. Parse symbols (clean up quotes and spaces)
-            symbol_input = params.get("symbol", "SPY")
-            symbols = [
-                s.strip().replace('"', "").replace("'", "")
-                for s in symbol_input.split(",")
-                if s.strip()
-            ]
-            if not symbols:
-                symbols = ["SPY"]
+            # Find newly generated reports in logs/
+            import glob
 
-            # 3. Parse interval (优先从配置文件读取)
             base_dir = os.path.dirname(os.path.abspath(__file__))
-            config_path = os.path.join(base_dir, "../../configs/qlib_ml_config.yaml")
-            interval = params.get("interval", None)
+            logs_dir = os.path.join(os.path.dirname(os.path.dirname(base_dir)), "logs")
 
-            if interval is None and os.path.exists(config_path):
-                try:
-                    with open(config_path, "r") as f:
-                        config = yaml.safe_load(f)
-                        if config:
-                            if "data" in config and "interval" in config["data"]:
-                                interval = config["data"]["interval"]
-                            elif "strategy" in config and "ml" in config["strategy"] and "interval" in config["strategy"]["ml"]:
-                                interval = config["strategy"]["ml"]["interval"]
-                except Exception as e:
-                    log_message(f"Error reading config for interval: {e}")
+            # Look for html files generated recently
+            html_files = glob.glob(os.path.join(logs_dir, "*.html"))
+            new_reports = []
+            for f in html_files:
+                if os.path.getmtime(f) >= start_time.timestamp() - 5:  # 5s buffer
+                    new_reports.append(os.path.basename(f))
 
-            if interval is None:
-                interval = "1min"
-            if interval not in ["1d", "1h", "1min"]:
-                interval = "1min"
+            tearsheet = next((f for f in new_reports if "tearsheet" in f), None)
+            trades_report = next((f for f in new_reports if "trades" in f), None)
 
-            log_message(
-                f"Backtesting {symbols} from {backtesting_start} to {backtesting_end} (Interval: {interval})"
-            )
-
-            # 4. Execute backtest with ML strategy
-            strategy_class = QlibMLStrategy
-
-            try:
-                # Map interval to LumiBot frequency
-                if interval == "1min":
-                    lumibot_interval = "minute"
-                elif interval == "1h":
-                    lumibot_interval = "hour"
-                else:
-                    lumibot_interval = "day"
-
-                # 如果未指定模型，使用当前最优模型
-                model_name = params.get("model_name", ml_config.get("model_name"))
-                if model_name is None:
-                    model_name = model_manager.get_current_model()
-
-                backtest_params = {
-                    "symbols": symbols,
-                    "model_name": model_name,
-                    "top_k": params.get("top_k", ml_config.get("top_k", 3)),
-                    "sleeptime": "0S",
-                    "timestep": "1M" if interval == "1min" else ("1H" if interval == "1h" else "1D"),
+            if tearsheet or trades_report:
+                state["last_backtest"] = {
+                    "tearsheet": f"/reports/{tearsheet}" if tearsheet else None,
+                    "trades": f"/reports/{trades_report}" if trades_report else None,
+                    "timestamp": datetime.now().isoformat(),
                 }
+                log_message(f"Backtest reports generated: {new_reports}")
 
-                # If multiple symbols, use SPY as benchmark for better clarity
-                benchmark = (
-                    "SPY" if len(symbols) > 1 or symbols[0] != "SPY" else symbols[0]
-                )
-
-                # Start time to identify new files
-                start_time = datetime.now()
-
-                strategy_class.backtest(
-                    YahooDataBacktesting,
-                    backtesting_start,
-                    backtesting_end,
-                    benchmark_asset=benchmark,
-                    parameters=backtest_params,
-                    time_unit=lumibot_interval,
-                )
-
-                # Find newly generated reports in logs/
-                import glob
-
-                base_dir = os.path.dirname(os.path.abspath(__file__))
-                logs_dir = os.path.join(os.path.dirname(os.path.dirname(base_dir)), "logs")
-
-                # Look for html files generated recently
-                html_files = glob.glob(os.path.join(logs_dir, "*.html"))
-                new_reports = []
-                for f in html_files:
-                    if (
-                        os.path.getmtime(f) >= start_time.timestamp() - 5
-                    ):  # 5s buffer
-                        new_reports.append(os.path.basename(f))
-
-                tearsheet = next((f for f in new_reports if "tearsheet" in f), None)
-                trades_report = next(
-                    (f for f in new_reports if "trades" in f), None
-                )
-
-                if tearsheet or trades_report:
-                    state["last_backtest"] = {
-                        "tearsheet": f"/reports/{tearsheet}" if tearsheet else None,
-                        "trades": f"/reports/{trades_report}"
-                        if trades_report
-                        else None,
-                        "timestamp": datetime.now().isoformat(),
-                    }
-                    log_message(f"Backtest reports generated: {new_reports}")
-
-                log_message("Backtest finished successfully.")
-            except Exception as e:
-                import traceback
-
-                log_message(f"Backtest execution failed: {e}")
-                print(traceback.format_exc())
-
+            log_message("Backtest finished successfully.")
         except Exception as e:
-            log_message(f"Backtest error: {e}")
+            import traceback
 
-    # Start backtest in background thread
-    thread = threading.Thread(target=_backtest_task, daemon=True)
-    thread.start()
+            log_message(f"Backtest execution failed: {e}")
+            print(traceback.format_exc())
+
+    except Exception as e:
+        log_message(f"Backtest error: {e}")
+
+
+def run_backtest(params: dict) -> dict:
+    """Run a backtest in a separate process to avoid signal errors."""
+    # Start backtest in background process (avoids signal errors)
+    process = multiprocessing.Process(target=_backtest_task, args=(params,), daemon=True)
+    process.start()
     return {"status": "backtest_started"}
 
 

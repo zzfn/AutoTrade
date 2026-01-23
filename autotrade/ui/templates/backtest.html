@@ -11,6 +11,7 @@
       symbol: "AAPL,MSFT,GOOGL,AMZN,NVDA,META,TSLA",
       model_name: "",
       top_k: 3,
+      interval: "5min",  // 默认 5 分钟（与配置文件一致）
     });
     const [models, setModels] = useState([]);
     const [loading, setLoading] = useState(false);
@@ -108,16 +109,9 @@
               <label className="block text-sm font-medium text-slate-400 mb-1.5">
                 数据频率
               </label>
-              <select
-                className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg p-2.5 text-slate-200 focus:border-cyan-500/50 outline-none transition-colors"
-                value={params.interval || "1d"}
-                onChange={(e) =>
-                  setParams({ ...params, interval: e.target.value })
-                }
-              >
-                <option value="1d">日线 (Daily)</option>
-                <option value="1h">1小时线 (Hourly)</option>
-              </select>
+              <div className="w-full bg-slate-900/50 border border-slate-700/50 rounded-lg p-2.5 text-slate-500 text-sm">
+                5分钟线 (5 Min) - 固定设置
+              </div>
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-400 mb-1.5">
@@ -222,7 +216,7 @@
                   ))}
             </div>
             <div className="text-xs text-slate-500 text-center bg-slate-800/30 py-2 rounded-lg border border-slate-700/20">
-              数据源: Yahoo Finance (每日收盘价)
+              数据源: Alpaca API（与数据中心、训练、实盘保持一致）
             </div>
           </div>
         </Card>
