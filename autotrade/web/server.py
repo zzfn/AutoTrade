@@ -1534,6 +1534,125 @@ async def get_data_sync_status():
     return get_data_sync_status_internal()
 
 
+@app.get("/api/portfolio/history")
+async def get_portfolio_history(
+    period: str = "1D",
+    timeframe: str = "5Min"
+):
+    """获取投资组合历史数据（资金曲线）
+
+    Args:
+        period: 时间范围 - 1D=1天, 1M=1月, 3M=3月, 1Y=1年, all=全部
+        timeframe: 时间粒度 - 1Min, 5Min, 15Min, 1H, 1D
+
+    Returns:
+        包含时间戳和权益数据的 JSON
+    """
+    try:
+        from alpaca.trading.requests import GetPortfolioHistoryRequest
+
+        # 只有在策略运行时才能获取数据
+        if not active_strategy or not is_running:
+            return {
+                "status": "error",
+                "message": "策略未运行",
+                "data": None
+            }
+
+        # 获取 broker 实例
+        broker = active_strategy.broker
+
+        # 检查是否有 API 实例
+        if not hasattr(broker, "api"):
+            return {
+                "status": "error",
+                "message": "Broker 不支持历史数据查询",
+                "data": None
+            }
+
+        # 调用 Alpaca API 获取投资组合历史
+        logger.info(f"获取投资组合历史: period={period}, timeframe={timeframe}")
+
+        # 创建请求对象
+        history_request = GetPortfolioHistoryRequest(
+            period=period,
+            timeframe=timeframe
+        )
+
+        portfolio_history = broker.api.get_portfolio_history(
+            history_filter=history_request
+        )
+
+        # 解析返回数据
+        # PortfolioHistory 对象有以下属性: timestamp, equity, profit_loss, profit_loss_pct, base_value
+        raw_data = {}
+        if hasattr(portfolio_history, 'model_dump'):
+            raw_data = portfolio_history.model_dump()
+        elif hasattr(portfolio_history, '_raw'):
+            raw_data = portfolio_history._raw
+        elif hasattr(portfolio_history, '__dict__'):
+            raw_data = portfolio_history.__dict__
+
+        # 提取数据，确保是列表
+        timestamps = raw_data.get('timestamp', [])
+        equity_values = raw_data.get('equity', [])
+        profit_loss = raw_data.get('profit_loss', [])
+        profit_loss_pct = raw_data.get('profit_loss_pct', [])
+        base_value = raw_data.get('base_value', [])
+
+        # 确保所有值都是列表
+        if not isinstance(timestamps, list):
+            logger.warning(f"timestamps 不是列表: {type(timestamps)}")
+            timestamps = []
+        if not isinstance(equity_values, list):
+            logger.warning(f"equity_values 不是列表: {type(equity_values)}")
+            equity_values = []
+        if not isinstance(profit_loss, list):
+            logger.warning(f"profit_loss 不是列表: {type(profit_loss)}")
+            profit_loss = []
+        if not isinstance(profit_loss_pct, list):
+            logger.warning(f"profit_loss_pct 不是列表: {type(profit_loss_pct)}")
+            profit_loss_pct = []
+        # base_value 可能是单个值（Alpaca API 返回初始投资金额）或列表
+        if isinstance(base_value, (int, float)):
+            # 单个值：转换为列表，复制到所有时间点
+            base_value = [base_value] * len(timestamps)
+            logger.info(f"base_value 是单个值，已转换为列表（初始金额: {base_value[0]}）")
+        elif not isinstance(base_value, list):
+            logger.warning(f"base_value 类型异常: {type(base_value)}")
+            base_value = []
+
+        # 格式化数据为前端可用的格式
+        history_data = []
+        for i, ts in enumerate(timestamps):
+            history_data.append({
+                "timestamp": ts,
+                "equity": float(equity_values[i]) if i < len(equity_values) else None,
+                "profit_loss": float(profit_loss[i]) if i < len(profit_loss) else None,
+                "profit_loss_pct": float(profit_loss_pct[i]) if i < len(profit_loss_pct) else None,
+                "base_value": float(base_value[i]) if i < len(base_value) else None,
+            })
+
+        logger.info(f"返回 {len(history_data)} 条历史数据")
+
+        return {
+            "status": "success",
+            "data": history_data,
+            "period": period,
+            "timeframe": timeframe
+        }
+
+    except Exception as e:
+        logger.error(f"获取投资组合历史失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "status": "error",
+            "message": str(e),
+            "data": None
+        }
+
+
 @app.get("/api/data/config")
 async def get_data_config():
     """获取数据配置（标的池、频率等）"""

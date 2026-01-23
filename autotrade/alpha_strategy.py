@@ -11,9 +11,10 @@ import numpy as np
 import pandas as pd
 from lumibot.strategies.strategy import Strategy
 
-# 应用 Lumibot 补丁：禁用云功能
-from autotrade.lumibot_patches import patch_strategy_to_disable_cloud
+# 应用 Lumibot 补丁：禁用云功能 + 修复 Alpaca timeframe 映射
+from autotrade.lumibot_patches import patch_strategy_to_disable_cloud, patch_alpaca_timeframe_mapping
 patch_strategy_to_disable_cloud()
+patch_alpaca_timeframe_mapping()
 
 # Suppress SettingWithCopyWarning from lumibot's bars.py
 # This is a third-party library issue, not affecting functionality
@@ -340,10 +341,10 @@ class AlphaStrategy(Strategy):
         """
         from datetime import timedelta
 
-        # 计算需要的 K 线数量（5 分钟数据每天 78 根）
+        # 计算需要的 K 线数量（lookback_period 作为 bars 数量）
         bars_per_day = 78  # 390 / 5 = 78
         min_required_bars = 30  # 至少需要 30 根 5 分钟 K 线
-        requested_bars = max(int(self.lookback_period * bars_per_day), min_required_bars)
+        requested_bars = max(int(self.lookback_period), min_required_bars)
 
         # 计算时间范围
         current_time = self.get_datetime()
@@ -351,36 +352,57 @@ class AlphaStrategy(Strategy):
         end_date = current_time
 
         # ========== Step 1: 尝试从本地缓存加载 ==========
-        try:
-            adapter = QlibDataAdapter(interval="5min")
-            cached_data = adapter.load_data(
-                symbols=self.symbols,
-                start_date=start_date,
-                end_date=end_date
-            )
+        if self.is_backtesting:
+            try:
+                adapter = QlibDataAdapter(interval="5min")
+                cached_data = adapter.load_data(
+                    symbols=self.symbols,
+                    start_date=start_date,
+                    end_date=end_date
+                )
 
-            # 检查缓存数据是否足够
-            if not cached_data.empty:
-                # 转换 MultiIndex DataFrame 到 {symbol: DataFrame} 格式
-                market_data = {}
-                for symbol in self.symbols:
-                    if symbol in cached_data.index.get_level_values("symbol"):
-                        symbol_df = cached_data.xs(symbol, level="symbol")
-                        if len(symbol_df) >= min_required_bars:
-                            market_data[symbol] = symbol_df
+                # 检查缓存数据是否足够
+                if not cached_data.empty:
+                    # 缓存太旧时直接走 API，避免用过期 K 线做预测
+                    try:
+                        ts_level = "timestamp" if "timestamp" in cached_data.index.names else cached_data.index.names[0]
+                        cache_max_ts = pd.Timestamp(cached_data.index.get_level_values(ts_level).max())
+                        current_ts = pd.Timestamp(current_time) if current_time else None
+                        if current_ts is not None:
+                            if cache_max_ts.tzinfo is None and current_ts.tzinfo is not None:
+                                cache_max_ts = cache_max_ts.tz_localize(current_ts.tzinfo)
+                            elif cache_max_ts.tzinfo is not None and current_ts.tzinfo is None:
+                                current_ts = current_ts.tz_localize(cache_max_ts.tzinfo)
+                            if current_ts - cache_max_ts > timedelta(days=2):
+                                self.log_message(f"缓存数据过旧(最新: {cache_max_ts}), 将从 API 获取")
+                                cached_data = pd.DataFrame()
+                    except Exception as e:
+                        self.log_message(f"缓存时间检查失败: {e}，将从 API 获取")
+                        cached_data = pd.DataFrame()
+
+                    if not cached_data.empty:
+                        # 转换 MultiIndex DataFrame 到 {symbol: DataFrame} 格式
+                        market_data = {}
+                        for symbol in self.symbols:
+                            if symbol in cached_data.index.get_level_values("symbol"):
+                                symbol_df = cached_data.xs(symbol, level="symbol")
+                                if len(symbol_df) >= min_required_bars:
+                                    market_data[symbol] = symbol_df
+                                else:
+                                    self.log_message(f"{symbol} 缓存数据不足: {len(symbol_df)} bars")
+
+                        if market_data:
+                            self.log_message(f"✓ 从本地缓存加载 {len(market_data)} 个股票数据")
+                            return market_data
                         else:
-                            self.log_message(f"{symbol} 缓存数据不足: {len(symbol_df)} bars")
-
-                if market_data:
-                    self.log_message(f"✓ 从本地缓存加载 {len(market_data)} 个股票数据")
-                    return market_data
+                            self.log_message("缓存数据不满足要求，将从 API 获取")
                 else:
-                    self.log_message("缓存数据不满足要求，将从 API 获取")
-            else:
-                self.log_message("未找到本地缓存，将从 API 获取")
+                    self.log_message("未找到本地缓存，将从 API 获取")
 
-        except Exception as e:
-            self.log_message(f"缓存加载失败: {e}，将从 API 获取")
+            except Exception as e:
+                self.log_message(f"缓存加载失败: {e}，将从 API 获取")
+        else:
+            self.log_message("实时模式：跳过本地缓存，直接从 API 获取")
 
         # ========== Step 2: 从 API 获取数据 ==========
         assets = [Asset(symbol=s) for s in self.symbols]
@@ -422,7 +444,7 @@ class AlphaStrategy(Strategy):
                 self.log_message(f"{symbol} 数据处理失败: {e}")
 
         # ========== Step 3: 保存到缓存（增量更新）==========
-        if market_data:
+        if self.is_backtesting and market_data:
             try:
                 adapter = QlibDataAdapter(interval="5min")
 

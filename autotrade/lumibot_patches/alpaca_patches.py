@@ -12,6 +12,7 @@ from datetime import timedelta
 import pandas as pd
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from lumibot.data_sources import AlpacaData
+from lumibot.data_sources.data_source import DataSource
 from lumibot.backtesting import AlpacaBacktesting
 
 
@@ -52,6 +53,35 @@ class FixedAlpacaData(AlpacaData):
             "representations": [TimeFrame.Day, "day"],
         },
     ]
+
+
+def patch_alpaca_timeframe_mapping():
+    """
+    修复 AlpacaData 的 TIMESTEP_MAPPING 与解析逻辑，避免传入错误的 timeframe 类型。
+    """
+    AlpacaData.TIMESTEP_MAPPING = [
+        {"timestep": "minute", "representations": [TimeFrame.Minute, "minute"]},
+        {"timestep": "5 minutes", "representations": [TimeFrame(5, TimeFrameUnit.Minute), "5 minutes"]},
+        {"timestep": "10 minutes", "representations": [TimeFrame(10, TimeFrameUnit.Minute), "10 minutes"]},
+        {"timestep": "15 minutes", "representations": [TimeFrame(15, TimeFrameUnit.Minute), "15 minutes"]},
+        {"timestep": "30 minutes", "representations": [TimeFrame(30, TimeFrameUnit.Minute), "30 minutes"]},
+        {"timestep": "hour", "representations": [TimeFrame.Hour, "hour"]},
+        {"timestep": "1 hour", "representations": [TimeFrame.Hour, "1 hour"]},
+        {"timestep": "2 hours", "representations": [TimeFrame(2, TimeFrameUnit.Hour), "2 hours"]},
+        {"timestep": "4 hours", "representations": [TimeFrame(4, TimeFrameUnit.Hour), "4 hours"]},
+        {"timestep": "day", "representations": [TimeFrame.Day, "day"]},
+    ]
+
+    def _parse_source_timestep(self, timestep, reverse=False):
+        result = DataSource._parse_source_timestep(self, timestep, reverse=reverse)
+        if isinstance(result, (list, tuple)):
+            for item in result:
+                if isinstance(item, TimeFrame):
+                    return item
+            return result[0]
+        return result
+
+    AlpacaData._parse_source_timestep = _parse_source_timestep
 
 
 class MyAlpacaBacktesting(AlpacaBacktesting):

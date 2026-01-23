@@ -77,6 +77,84 @@ const StatusBadge = ({ status }) => {
   );
 };
 
+const AnimatedNumber = ({
+  value,
+  decimals = 2,
+  prefix = "",
+  suffix = "",
+  duration = 0.6,
+  showSign = false,
+  className = "",
+  format,
+}) => {
+  const spanRef = useRef(null);
+  const prevValueRef = useRef(
+    value !== null && value !== undefined ? Number(value) : 0,
+  );
+
+  useEffect(() => {
+    const el = spanRef.current;
+    if (!el) return;
+
+    const formatValue = (num) => {
+      if (typeof format === "function") return format(num);
+      const safeDecimals =
+        typeof decimals === "number" ? Math.max(decimals, 0) : 0;
+      const fixedValue = Number(num).toFixed(safeDecimals);
+      const sign = showSign && num > 0 ? "+" : "";
+      return `${sign}${prefix}${fixedValue}${suffix}`;
+    };
+
+    const isInvalid =
+      value === null || value === undefined || Number.isNaN(Number(value));
+    if (isInvalid) {
+      el.textContent = "-";
+      prevValueRef.current = 0;
+      return;
+    }
+
+    const nextValue = Number(value);
+    const fromValue = Number.isFinite(prevValueRef.current)
+      ? prevValueRef.current
+      : nextValue;
+    prevValueRef.current = nextValue;
+
+    const prefersReducedMotion =
+      window.matchMedia &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (
+      prefersReducedMotion ||
+      !window.Motion ||
+      typeof window.Motion.animate !== "function" ||
+      fromValue === nextValue
+    ) {
+      el.textContent = formatValue(nextValue);
+      return;
+    }
+
+    const controls = window.Motion.animate(fromValue, nextValue, {
+      duration,
+      ease: "easeOut",
+      onUpdate: (latest) => {
+        el.textContent = formatValue(latest);
+      },
+    });
+
+    return () => {
+      if (controls && typeof controls.stop === "function") {
+        controls.stop();
+      }
+    };
+  }, [value, decimals, prefix, suffix, duration, showSign, format]);
+
+  return (
+    <span
+      ref={spanRef}
+      className={`tabular-nums ${className}`}
+    />
+  );
+};
+
 // Hook for WebSocket
 const useWebSocket = (url) => {
   const [data, setData] = useState(null);
