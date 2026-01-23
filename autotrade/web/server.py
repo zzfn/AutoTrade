@@ -22,12 +22,12 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from lumibot.backtesting import AlpacaBacktesting
 from lumibot.brokers import Alpaca
 from lumibot.traders import Trader
 
 from autotrade.strategies import QlibMLStrategy
 from autotrade.ml import ModelManager
+from autotrade.web.backtest_tasks import create_task, get_task, init_db, run_worker_loop
 
 
 load_dotenv()
@@ -63,6 +63,9 @@ strategy_thread: threading.Thread | None = None
 monitor_thread: threading.Thread | None = None
 is_running = False
 trader_instance = None
+
+# Backtest worker process
+_backtest_worker_process: multiprocessing.Process | None = None
 
 # Track known orders to prevent duplicate logs
 _known_order_ids: set = set()
@@ -241,130 +244,9 @@ def initialize_and_start() -> dict:
         return {"status": "error", "message": str(e)}
 
 
-def _backtest_task(params: dict) -> None:
-    try:
-        log_message("Starting backtest...")
-
-        # 1. Parse dates
-        backtesting_start = datetime.strptime(
-            params.get("start_date", "2023-01-01"), "%Y-%m-%d"
-        )
-        backtesting_end = datetime.strptime(
-            params.get("end_date", "2023-01-31"), "%Y-%m-%d"
-        )
-
-        # 2. Parse symbols (clean up quotes and spaces)
-        symbol_input = params.get("symbol", "SPY")
-        symbols = [
-            s.strip().replace('"', "").replace("'", "")
-            for s in symbol_input.split(",")
-            if s.strip()
-        ]
-        if not symbols:
-            symbols = ["SPY"]
-
-        # 3. 固定使用 5 分钟回测
-        interval = "5min"
-
-        log_message(
-            f"Backtesting {symbols} from {backtesting_start} to {backtesting_end} (Interval: {interval})"
-        )
-
-        # 4. Execute backtest with ML strategy
-        strategy_class = QlibMLStrategy
-
-        try:
-            lumibot_interval = "minute"
-
-            # 如果未指定模型，使用当前最优模型
-            model_name = params.get("model_name", ml_config.get("model_name"))
-            if model_name is None:
-                model_name = model_manager.get_current_model()
-
-            backtest_params = {
-                "symbols": symbols,
-                "model_name": model_name,
-                "top_k": params.get("top_k", ml_config.get("top_k", 3)),
-                "sleeptime": "0S",
-                "timestep": "5M",
-            }
-
-            # If multiple symbols, use SPY as benchmark for better clarity
-            benchmark = (
-                "SPY" if len(symbols) > 1 or symbols[0] != "SPY" else symbols[0]
-            )
-
-            # Start time to identify new files
-            start_time = datetime.now()
-
-            # 使用 AlpacaBacktesting（与数据中心数据源一致）
-            api_key = os.getenv("ALPACA_API_KEY")
-            api_secret = os.getenv("ALPACA_API_SECRET")
-            paper_trading = os.getenv("ALPACA_PAPER", "True").lower() == "true"
-
-            if not api_key or not api_secret:
-                raise ValueError("缺少 Alpaca API 凭证，请设置 ALPACA_API_KEY 和 ALPACA_API_SECRET 环境变量")
-
-            alpaca_config = {
-                "API_KEY": api_key,
-                "API_SECRET": api_secret,
-                "PAPER": paper_trading,
-            }
-
-            strategy_class.backtest(
-                AlpacaBacktesting,
-                backtesting_start,
-                backtesting_end,
-                config=alpaca_config,
-                benchmark_asset=benchmark,
-                parameters=backtest_params,
-                time_unit=lumibot_interval,
-                api_key=api_key,
-                api_secret=api_secret,
-                show_progress_bar=True,
-            )
-
-            # Find newly generated reports in logs/
-            import glob
-
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            logs_dir = os.path.join(os.path.dirname(os.path.dirname(base_dir)), "logs")
-
-            # Look for html files generated recently
-            html_files = glob.glob(os.path.join(logs_dir, "*.html"))
-            new_reports = []
-            for f in html_files:
-                if os.path.getmtime(f) >= start_time.timestamp() - 5:  # 5s buffer
-                    new_reports.append(os.path.basename(f))
-
-            tearsheet = next((f for f in new_reports if "tearsheet" in f), None)
-            trades_report = next((f for f in new_reports if "trades" in f), None)
-
-            if tearsheet or trades_report:
-                state["last_backtest"] = {
-                    "tearsheet": f"/reports/{tearsheet}" if tearsheet else None,
-                    "trades": f"/reports/{trades_report}" if trades_report else None,
-                    "timestamp": datetime.now().isoformat(),
-                }
-                log_message(f"Backtest reports generated: {new_reports}")
-
-            log_message("Backtest finished successfully.")
-        except Exception as e:
-            import traceback
-
-            log_message(f"Backtest execution failed: {e}")
-            print(traceback.format_exc())
-
-    except Exception as e:
-        log_message(f"Backtest error: {e}")
-
-
 def run_backtest(params: dict) -> dict:
-    """Run a backtest in a separate process to avoid signal errors."""
-    # Start backtest in background process (avoids signal errors)
-    process = multiprocessing.Process(target=_backtest_task, args=(params,), daemon=True)
-    process.start()
-    return {"status": "backtest_started"}
+    """Submit a backtest task and return the task id."""
+    return create_task(params)
 
 
 def start_strategy(runner=None) -> bool:
@@ -1320,10 +1202,21 @@ async def lifespan(app: FastAPI):
     此 lifespan 仅处理清理逻辑。
     """
     logger.info("FastAPI 服务器启动...（仅作为 UI 显示）")
+    init_db()
+    global _backtest_worker_process
+    if _backtest_worker_process is None or not _backtest_worker_process.is_alive():
+        _backtest_worker_process = multiprocessing.Process(
+            target=run_worker_loop,
+            daemon=True,
+        )
+        _backtest_worker_process.start()
     
     yield
     
     logger.info("FastAPI 服务器关闭...")
+    if _backtest_worker_process and _backtest_worker_process.is_alive():
+        _backtest_worker_process.terminate()
+        _backtest_worker_process.join(timeout=2)
     # 如果策略仍在运行，尝试清理
     if is_running:
         try:
@@ -1365,6 +1258,14 @@ async def read_backtest(request: Request):
 async def api_run_backtest(request: Request):
     params = await request.json()
     return run_backtest(params)
+
+
+@app.get("/api/backtest/tasks/{task_id}")
+async def api_get_backtest_task(task_id: str):
+    task = get_task(task_id)
+    if not task:
+        return {"error": "task_not_found"}
+    return task
 
 
 # ==================== ML 策略相关 API ====================
