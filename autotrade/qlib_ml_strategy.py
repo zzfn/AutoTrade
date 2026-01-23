@@ -4,11 +4,17 @@ Qlib ML Strategy - Machine learning driven trading strategy.
 This strategy uses Qlib-trained ML models to predict returns and make trading decisions.
 It has been refactored to use the new `ml` and `data` modules for cleaner architecture.
 """
+import warnings
 from typing import Optional
 
 import numpy as np
 import pandas as pd
 from lumibot.strategies.strategy import Strategy
+
+# Suppress SettingWithCopyWarning from lumibot's bars.py
+# This is a third-party library issue, not affecting functionality
+warnings.filterwarnings('ignore', message='.*SettingWithCopyWarning.*', module='lumibot.*')
+pd.options.mode.chained_assignment = None
 from lumibot.entities import Asset
 
 # Import from new module locations
@@ -178,42 +184,67 @@ class QlibMLStrategy(Strategy):
             self.inference_engine = None
             self.trainer = None
 
-    def on_trading_iteration(self):
+    def _has_pending_orders(self) -> bool:
         """
-        Trading iteration - core logic.
-
-        Each iteration:
-        1. Fetch data and generate predictions
-        2. Select Top-K stocks
-        3. Rebalance portfolio
-        4. Update and persist state
+        检查是否有待处理的订单。
+        
+        Returns:
+            True 如果有未完成订单，否则 False
         """
         try:
+            orders = self.get_orders()
+            pending = [o for o in orders if o.status in ("open", "pending", "new")]
+            if pending:
+                self.log_message(f"有 {len(pending)} 个待处理订单")
+                return True
+            return False
+        except Exception as e:
+            self.log_message(f"检查订单状态失败: {e}")
+            return False
+
+    def on_trading_iteration(self):
+        """
+        Trading iteration - 核心逻辑。
+        
+        每次迭代按以下 5 个步骤执行：
+        1. 获取时间
+        2. 检查订单
+        3. 获取数据
+        4. 计算逻辑
+        5. 执行下单
+        """
+        try:
+            # ===== Step 1: 获取时间 =====
             current_time = self.get_datetime()
-            # Get predictions
-            predictions = self._get_predictions()
-            self.log_message(f"wwwwwwwww===Current predictions: {predictions}")
-
-            if not predictions:
-                self.log_message("Unable to get predictions, skipping this iteration")
-                return
-
-            # Select Top-K
-            top_symbols = self._select_top_k(predictions)
-            self.log_message(f"Top-{self.top_k} stocks: {top_symbols}")
-
-            # Execute trades (pass predictions for weighted allocation)
-            self._rebalance_portfolio(top_symbols, predictions)
-
-            # Update state
-            self.current_predictions = predictions
+            self.log_message(f"=== Trading iteration at {current_time} ===")
             
-            # ========== Persist state to DB ==========
-            self._update_persistent_state(predictions, top_symbols, current_time)
-
+            # ===== Step 2: 检查订单 =====
+            if self._has_pending_orders():
+                self.log_message("有待处理订单，跳过本次迭代")
+                return
+            
+            # ===== Step 3: 获取数据 =====
+            market_data = self._fetch_market_data()
+            if market_data is None:
+                self.log_message("无法获取市场数据，跳过本次迭代")
+                return
+            
+            # ===== Step 4: 计算逻辑 =====
+            predictions = self._compute_predictions(market_data)
+            if not predictions:
+                self.log_message("无法获取预测，跳过本次迭代")
+                return
+            
+            self.log_message(f"预测结果: {predictions}")
+            
+            # ===== Step 5: 执行下单 =====
+            top_symbols = self._select_top_k(predictions)
+            self.log_message(f"Top-{self.top_k} 股票: {top_symbols}")
+            
+            self._execute_trades(top_symbols, predictions, current_time)
+            
         except Exception as e:
             import traceback
-
             self.log_message(f"Trading iteration error: {e}")
             traceback.print_exc()
     
@@ -265,91 +296,103 @@ class QlibMLStrategy(Strategy):
         self.vars.stop_loss_levels = stop_loss_levels
         self.vars.take_profit_levels = take_profit_levels
 
-    def _get_predictions(self) -> dict:
+    def _fetch_market_data(self) -> Optional[dict]:
         """
-        Get prediction scores for all candidate stocks.
-
+        获取所有候选股票的历史数据。
+        
         Returns:
-            {symbol: predicted_return} dictionary
+            {symbol: DataFrame} 字典，如果失败返回 None
         """
-        predictions = {}
-
-        # Create Asset objects for batch fetching
         assets = [Asset(symbol=s) for s in self.symbols]
-
-        # Batch fetch historical data for all assets
-        # Fetch 1-minute data and aggregate to 5-minute (bypass Lumibot's buggy timestep mapping)
-        # lookback_period is in days; convert to 1-min bars to ensure enough samples.
+        
+        # 计算需要的 K 线数量
         bars_per_day = 390
         min_required_bars = 30 * 5
         requested_bars = max(int(self.lookback_period * bars_per_day), min_required_bars)
+        
         try:
             histories = self.get_historical_prices_for_assets(
                 assets, requested_bars, "minute"
             )
         except Exception as e:
-            self.log_message(f"Failed to fetch batch history: {e}")
-            return predictions
-
+            self.log_message(f"批量获取历史数据失败: {e}")
+            return None
+        
         if not histories:
-            self.log_message("No historical data returned")
-            return predictions
-
-        # Process each symbol
-        # histories is expected to be a dict {asset: Bars/DataFrame}
+            self.log_message("未返回历史数据")
+            return None
+        
+        # 转换为标准格式
+        market_data = {}
         for asset, history in histories.items():
             symbol = asset.symbol
             try:
                 if history is None:
                     continue
-
-                # Check for empty data
                 if hasattr(history, 'df') and history.df.empty:
                     continue
                 if isinstance(history, pd.DataFrame) and history.empty:
                     continue
-
-                # Use adapter to standardize data format
+                
+                # 使用适配器标准化数据格式
                 df = lumibot_to_qlib(history, symbol=symbol)
-
-                # Aggregate 1-minute data to 5-minute
+                
+                # 聚合为 5 分钟数据
+                # 使用 .copy() 确保是独立副本，避免 lumibot 内部的 SettingWithCopyWarning
                 df = df.resample('5min').agg({
                     'open': 'first',
                     'high': 'max',
                     'low': 'min',
                     'close': 'last',
                     'volume': 'sum'
-                }).dropna()
+                }).dropna().copy()
+                
+                if len(df) >= 30:
+                    market_data[symbol] = df
+                else:
+                    self.log_message(f"{symbol} 数据不足: {len(df)} bars")
+                    
+            except Exception as e:
+                self.log_message(f"{symbol} 数据处理失败: {e}")
+        
+        return market_data if market_data else None
 
-                if len(df) < 30:  # Need enough data for features
-                    self.log_message(f"Insufficient data for {symbol}: {len(df)} bars")
-                    continue
-
-                # Generate features
+    def _compute_predictions(self, market_data: dict) -> dict:
+        """
+        基于市场数据计算预测分数。
+        
+        Args:
+            market_data: {symbol: DataFrame} 字典
+            
+        Returns:
+            {symbol: predicted_return} 字典
+        """
+        predictions = {}
+        
+        for symbol, df in market_data.items():
+            try:
+                # 生成特征
                 features = self._generate_features(df)
-
                 if features is None or features.empty:
                     continue
-
-                # Get latest features
+                
+                # 获取最新特征
                 latest_features = features.iloc[[-1]]
-
-                # Predict
+                
+                # 预测
                 if self.inference_engine is not None and self.inference_engine.is_loaded:
-                    # Use inference engine (which uses the trainer internally)
                     pred = self.trainer.predict(latest_features)[0]
                 elif self.trainer is not None:
-                    # Legacy: direct trainer usage
                     pred = self.trainer.predict(latest_features)[0]
                 else:
-                    # No model - use momentum as proxy
+                    # 无模型时使用动量代理
                     pred = df["close"].pct_change(5).iloc[-1]
-
+                
                 predictions[symbol] = float(pred)
-
+                
             except Exception as e:
-                self.log_message(f"Prediction failed for {symbol}: {e}")
-
+                self.log_message(f"{symbol} 预测失败: {e}")
+        
         return predictions
 
     def _generate_features(self, df: pd.DataFrame) -> Optional[pd.DataFrame]:
@@ -415,185 +458,191 @@ class QlibMLStrategy(Strategy):
             weight = 1.0 / len(target_symbols)
             return {symbol: weight for symbol in target_symbols}
 
-    def _rebalance_portfolio(self, target_symbols: list, predictions: dict = None):
+    def _get_current_positions(self) -> dict:
         """
-        Rebalance portfolio to target holdings.
-
-        This method uses get_positions() to identify ALL currently held positions,
-        ensuring any "orphan" positions (positions not in self.symbols) are also
-        handled and sold if not in the target list.
-
-        Args:
-            target_symbols: List of target stock symbols
-            predictions: Optional predictions dict for weighted allocation
+        获取当前所有持仓。
+        
+        Returns:
+            {symbol: quantity} 字典
         """
-        # Get ALL current positions using get_positions() to catch orphan positions
         all_positions = self.get_positions()
-        current_positions = {}
+        positions = {}
         for pos in all_positions:
             symbol = pos.asset.symbol if hasattr(pos.asset, 'symbol') else str(pos.asset)
-            qty = float(pos.quantity)
-            # Track both long (qty > 0) and short (qty < 0) positions
-            current_positions[symbol] = qty
+            positions[symbol] = float(pos.quantity)
+        return positions
 
-        # Determine stocks to close (includes orphan positions not in self.symbols)
+    def _calculate_order_plan(self, target_symbols: list, predictions: dict) -> list:
+        """
+        计算需要执行的订单列表。
+        
+        Returns:
+            订单信息列表 [{"symbol": str, "qty": int, "side": str, "reason": str}, ...]
+        """
+        order_plan = []
+        
+        # 获取当前持仓
+        current_positions = self._get_current_positions()
+        
+        # 1. 计算需要平仓的股票
         to_close = set(current_positions.keys()) - set(target_symbols)
-
-        # Log if we found orphan positions
+        
+        # 记录孤儿仓位
         orphans = to_close - set(self.symbols)
         if orphans:
-            self.log_message(f"Found orphan positions to close: {orphans}")
-
-        # Close positions not in target (handle both long and short)
+            self.log_message(f"发现孤儿仓位需平仓: {orphans}")
+        
         for symbol in to_close:
             qty = current_positions[symbol]
-            if qty == 0:
-                continue
-
-            # Determine close side based on position direction
             if qty > 0:
-                # Close long position: sell the shares
-                side = "sell"
-                close_qty = qty
-                self.log_message(f"Closing long {symbol}: {close_qty} shares (selling)")
-            else:
-                # Close short position: buy to cover
-                side = "buy"
-                close_qty = abs(qty)
-                self.log_message(f"Closing short {symbol}: {close_qty} shares (buying to cover)")
-
-            order = self.create_order(symbol, close_qty, side)
-            self.submit_order(order)
-
-        # Calculate target amounts
+                order_plan.append({
+                    "symbol": symbol, "qty": qty, 
+                    "side": "sell", "reason": "close_long"
+                })
+            elif qty < 0:
+                order_plan.append({
+                    "symbol": symbol, "qty": abs(qty), 
+                    "side": "buy", "reason": "close_short"
+                })
+        
+        # 2. 计算目标权重和仓位
         total_value = self.portfolio_value or self.get_cash()
         if total_value <= 0:
-            return
-
-        # Reserve 5% cash buffer
-        available_capital = total_value * 0.95
-
-        # Calculate target weights
-        if predictions is None:
-            predictions = self.current_predictions or {}
+            return order_plan
+            
+        available_capital = total_value * 0.95  # 保留 5% 现金缓冲
         weights = self._calculate_target_weights(predictions, target_symbols)
-
-        # Buy/adjust based on weights and prediction signs
+        
+        # 3. 计算每个目标股票的订单
         for symbol in target_symbols:
             try:
                 price = self.get_last_price(symbol)
-                if price is None or price <= 0:
+                if not price or price <= 0:
                     continue
-
-                # Calculate target allocation for this symbol
+                
                 weight = weights.get(symbol, 0.0)
                 target_value = available_capital * weight
                 base_qty = int(target_value / price)
-
-                # Determine direction based on prediction sign
+                
+                # 根据预测方向决定多空
                 prediction = predictions.get(symbol, 0.0)
-                if prediction >= 0:
-                    # Long position
-                    target_qty = base_qty
-                    direction = "LONG"
-                else:
-                    # Short position
-                    target_qty = -base_qty
-                    direction = "SHORT"
-
-                # Get current position
+                target_qty = base_qty if prediction >= 0 else -base_qty
+                direction = "LONG" if prediction >= 0 else "SHORT"
+                
                 current_qty = current_positions.get(symbol, 0)
-
-                # Calculate difference
                 diff = target_qty - current_qty
-
+                
                 if diff == 0:
                     continue
-
-                # Handle position transitions
+                
+                # 处理仓位转换（从多转空或从空转多）
                 if current_qty < 0 and target_qty > 0:
-                    # Cover short then open long
-                    cover_qty = abs(current_qty)
-                    if cover_qty > 0:
-                        self.log_message(
-                            f"Covering short {symbol}: {cover_qty} shares @ ${price:.2f}"
-                        )
-                        order = self.create_order(symbol, cover_qty, "buy")
-                        self.submit_order(order)
-                    # Then buy for long position
-                    buy_qty = target_qty
-                    if buy_qty > 0:
-                        self.log_message(
-                            f"Buying {symbol}: {buy_qty} shares @ ${price:.2f} ({direction}, weight: {weight:.2%}, pred: {prediction:.4f})"
-                        )
-                        order = self.create_order(symbol, buy_qty, "buy")
-                        self.submit_order(order)
-
+                    # 先平空再开多
+                    order_plan.append({
+                        "symbol": symbol, "qty": abs(current_qty),
+                        "side": "buy", "reason": "cover_short"
+                    })
+                    order_plan.append({
+                        "symbol": symbol, "qty": target_qty,
+                        "side": "buy", "reason": f"open_long ({direction}, weight: {weight:.2%}, pred: {prediction:.4f})"
+                    })
                 elif current_qty > 0 and target_qty < 0:
-                    # Sell long then open short
-                    sell_qty = current_qty
-                    if sell_qty > 0:
-                        self.log_message(
-                            f"Selling {symbol}: {sell_qty} shares @ ${price:.2f}"
-                        )
-                        order = self.create_order(symbol, sell_qty, "sell")
-                        self.submit_order(order)
-                    # Then sell for short position
-                    short_qty = abs(target_qty)
-                    if short_qty > 0:
-                        self.log_message(
-                            f"Shorting {symbol}: {short_qty} shares @ ${price:.2f} ({direction}, weight: {weight:.2%}, pred: {prediction:.4f})"
-                        )
-                        order = self.create_order(symbol, short_qty, "sell")
-                        self.submit_order(order)
-
+                    # 先平多再开空
+                    order_plan.append({
+                        "symbol": symbol, "qty": current_qty,
+                        "side": "sell", "reason": "close_long"
+                    })
+                    order_plan.append({
+                        "symbol": symbol, "qty": abs(target_qty),
+                        "side": "sell", "reason": f"open_short ({direction}, weight: {weight:.2%}, pred: {prediction:.4f})"
+                    })
                 elif diff > 0:
-                    # Need to buy more (increase long or cover short)
+                    # 需要买入更多
                     if target_qty > 0:
-                        # Adding to long position
+                        # 增加多头仓位
                         cash = self.get_cash()
                         max_buyable = int(cash / price)
                         buy_qty = min(diff, max_buyable)
-
                         if buy_qty > 0:
-                            self.log_message(
-                                f"Buying {symbol}: {buy_qty} shares @ ${price:.2f} ({direction}, weight: {weight:.2%}, pred: {prediction:.4f})"
-                            )
-                            order = self.create_order(symbol, buy_qty, "buy")
-                            self.submit_order(order)
+                            order_plan.append({
+                                "symbol": symbol, "qty": buy_qty,
+                                "side": "buy", "reason": f"add_long ({direction}, weight: {weight:.2%}, pred: {prediction:.4f})"
+                            })
                     else:
-                        # Covering part of short position (reducing short)
+                        # 减少空头仓位
                         cover_qty = min(diff, abs(current_qty))
                         if cover_qty > 0:
-                            self.log_message(
-                                f"Covering short {symbol}: {cover_qty} shares @ ${price:.2f}"
-                            )
-                            order = self.create_order(symbol, cover_qty, "buy")
-                            self.submit_order(order)
-
+                            order_plan.append({
+                                "symbol": symbol, "qty": cover_qty,
+                                "side": "buy", "reason": "reduce_short"
+                            })
                 elif diff < 0:
-                    # Need to sell more (reduce long or increase short)
+                    # 需要卖出更多
                     if target_qty >= 0:
-                        # Reducing long position
+                        # 减少多头仓位
                         sell_qty = abs(diff)
                         if sell_qty > 0:
-                            self.log_message(
-                                f"Selling {symbol}: {sell_qty} shares @ ${price:.2f}"
-                            )
-                            order = self.create_order(symbol, sell_qty, "sell")
-                            self.submit_order(order)
+                            order_plan.append({
+                                "symbol": symbol, "qty": sell_qty,
+                                "side": "sell", "reason": "reduce_long"
+                            })
                     else:
-                        # Adding to short position
+                        # 增加空头仓位
                         short_qty = abs(diff)
                         if short_qty > 0:
-                            self.log_message(
-                                f"Shorting {symbol}: {short_qty} shares @ ${price:.2f} ({direction}, weight: {weight:.2%}, pred: {prediction:.4f})"
-                            )
-                            order = self.create_order(symbol, short_qty, "sell")
-                            self.submit_order(order)
-
+                            order_plan.append({
+                                "symbol": symbol, "qty": short_qty,
+                                "side": "sell", "reason": f"add_short ({direction}, weight: {weight:.2%}, pred: {prediction:.4f})"
+                            })
+                            
             except Exception as e:
-                self.log_message(f"Failed to adjust position for {symbol}: {e}")
+                self.log_message(f"计算 {symbol} 订单失败: {e}")
+        
+        return order_plan
+
+    def _submit_single_order(self, order_info: dict):
+        """
+        提交单个订单并记录日志。
+        """
+        symbol = order_info["symbol"]
+        qty = order_info["qty"]
+        side = order_info["side"]
+        reason = order_info["reason"]
+        
+        if qty <= 0:
+            return
+        
+        try:
+            price = self.get_last_price(symbol)
+            self.log_message(f"{reason}: {side} {symbol} {qty} shares @ ${price:.2f}")
+            
+            order = self.create_order(symbol, qty, side)
+            self.submit_order(order)
+            
+        except Exception as e:
+            self.log_message(f"提交订单失败 {symbol}: {e}")
+
+    def _execute_trades(self, target_symbols: list, predictions: dict, current_time):
+        """
+        执行交易并更新状态。
+        
+        Args:
+            target_symbols: 目标持仓股票列表
+            predictions: 预测分数字典
+            current_time: 当前时间
+        """
+        # 计算订单计划
+        order_plan = self._calculate_order_plan(target_symbols, predictions)
+        
+        self.log_message(f"订单计划: {len(order_plan)} 个订单")
+        
+        # 执行订单
+        for order_info in order_plan:
+            self._submit_single_order(order_info)
+        
+        # 更新持久化状态
+        self.current_predictions = predictions
+        self._update_persistent_state(predictions, target_symbols, current_time)
 
     def get_prediction_summary(self) -> dict:
         """Get current prediction summary (for frontend display)."""
