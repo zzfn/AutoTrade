@@ -29,7 +29,7 @@ dependencies = [
     # 可视化与Web界面
     # "plotly>=6.5.2",             # 交互式图表 (未使用)
     # "shap>=0.49.1",              # 模型可解释性 (未使用)
-    # "websockets>=12.0",          # WebSocket 通信 (未使用)
+    "websockets>=12.0,<16.0",    # WebSocket 通信 (避免 websockets 16 弃用警告)
     "fastapi>=0.115.0",          # Web UI 框架
     "uvicorn>=0.30.0",           # ASGI 服务器
     # 因子分析
