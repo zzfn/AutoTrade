@@ -8,10 +8,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from autotrade.utils.timezone import format_et_time, format_et_time_short
+
 from autotrade.core.config import config
 from autotrade.lumibot_patches import MyAlpacaBacktesting
 from autotrade.ml import ModelManager
-from autotrade.qlib_ml_strategy import QlibMLStrategy
+from autotrade.alpha_strategy import AlphaStrategy
 
 
 _DB_FILENAME = "backtest_tasks.sqlite"
@@ -64,7 +66,7 @@ def init_db() -> None:
 def create_task(params: dict[str, Any]) -> dict[str, Any]:
     init_db()
     task_id = str(uuid.uuid4())
-    now = datetime.now().isoformat()
+    now = format_et_time(datetime.now())
     payload = json.dumps(params, ensure_ascii=True)
     with _connect_db() as conn:
         conn.execute(
@@ -80,7 +82,7 @@ def create_task(params: dict[str, Any]) -> dict[str, Any]:
 
 def append_log(task_id: str, message: str) -> None:
     init_db()
-    timestamp = datetime.now().strftime("%H:%M:%S")
+    timestamp = format_et_time_short(datetime.now())
     with _connect_db() as conn:
         conn.execute(
             f"""
@@ -99,7 +101,7 @@ def update_task(
     error_message: str | None = None,
 ) -> None:
     init_db()
-    now = datetime.now().isoformat()
+    now = format_et_time(datetime.now())
     updates = ["updated_at = ?"]
     params: list[Any] = [now]
     if status is not None:
@@ -159,7 +161,7 @@ def _claim_next_task() -> dict[str, Any] | None:
         ).fetchone()
         if not row:
             return None
-        now = datetime.now().isoformat()
+        now = format_et_time(datetime.now())
         updated = conn.execute(
             f"""
             UPDATE {_TASK_TABLE}
@@ -198,7 +200,7 @@ def _execute_backtest(params: dict[str, Any], log_fn: Callable[[str], None]) -> 
         f"Backtesting {symbols} from {backtesting_start} to {backtesting_end} (Interval: {interval})"
     )
 
-    strategy_class = QlibMLStrategy
+    strategy_class = AlphaStrategy
     model_manager = ModelManager()
 
     # Lumibot time_unit uses base units; 5min/15min still use "minute"
@@ -296,7 +298,7 @@ def _execute_backtest(params: dict[str, Any], log_fn: Callable[[str], None]) -> 
     result = {
         "tearsheet": f"/reports/{tearsheet}" if tearsheet else None,
         "trades": f"/reports/{trades_report}" if trades_report else None,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": format_et_time(datetime.now()),
     }
     if tearsheet or trades_report:
         log_fn(f"Backtest reports generated: {new_reports}")

@@ -1,8 +1,8 @@
 """
-Qlib ML Strategy - Machine learning driven trading strategy.
+Alpha Strategy - Machine learning driven trading strategy.
 
-This strategy uses Qlib-trained ML models to predict returns and make trading decisions.
-It has been refactored to use the new `ml` and `data` modules for cleaner architecture.
+Alpha represents the excess return over the market benchmark.
+This strategy uses ML models to predict returns and capture alpha.
 """
 import warnings
 from typing import Optional
@@ -24,22 +24,22 @@ from lumibot.entities import Asset
 # Import from new module locations
 from autotrade.ml import QlibFeatureGenerator, LightGBMTrainer, ModelManager
 from autotrade.ml.inference import ModelInference
-from autotrade.data import lumibot_to_qlib
+from autotrade.data import lumibot_to_qlib, QlibDataAdapter
 
 # Import patched backtesting classes (修复多分钟 timestep 支持)
 from autotrade.lumibot_patches import MyAlpacaBacktesting
 
 
-class QlibMLStrategy(Strategy):
+class AlphaStrategy(Strategy):
     """
-    Qlib ML Strategy.
+    Alpha Strategy - ML-driven quantitative trading strategy.
 
     A fully ML-model driven trading strategy:
     1. Fetch historical data for candidate stocks
-    2. Generate Qlib-compatible features
-    3. Use ML model to predict returns
+    2. Generate ML-compatible features
+    3. Use ML model to predict returns (alpha)
     4. Select Top-K stocks with highest predicted scores
-    5. Allocate capital equally
+    5. Allocate capital based on prediction confidence
     6. Execute trades
 
     Strategy Parameters:
@@ -75,6 +75,7 @@ class QlibMLStrategy(Strategy):
 
         # State tracking
         self.current_predictions: dict = {}
+        self.current_prediction_meta: dict = {}
 
         # Load model
         self._load_model()
@@ -83,7 +84,7 @@ class QlibMLStrategy(Strategy):
         # This will be automatically backed up to DB by Lumibot
         self._init_persistent_state()
 
-        self.log_message(f"QlibMLStrategy initialized")
+        self.log_message(f"AlphaStrategy initialized")
         self.log_message(f"Stock pool: {self.symbols}")
         self.log_message(f"Top-K: {self.top_k}")
 
@@ -243,6 +244,31 @@ class QlibMLStrategy(Strategy):
                 return
             
             self.log_message(f"预测结果: {predictions}")
+
+            # 记录预测时刻与最新价格时间，用于前端展示
+            prediction_meta = {}
+            for symbol in predictions.keys():
+                df = market_data.get(symbol)
+                price = None
+                price_time = None
+                if df is not None and not df.empty and "close" in df.columns:
+                    last_close = df["close"].iloc[-1]
+                    if pd.notna(last_close):
+                        price = float(last_close)
+                    try:
+                        last_index = df.index[-1]
+                        if isinstance(last_index, pd.Timestamp):
+                            price_time = last_index.to_pydatetime().isoformat()
+                        else:
+                            price_time = pd.Timestamp(last_index).to_pydatetime().isoformat()
+                    except Exception:
+                        pass
+                prediction_meta[symbol] = {
+                    "price": price,
+                    "price_time": price_time,
+                    "prediction_time": current_time.isoformat() if current_time else None,
+                }
+            self.current_prediction_meta = prediction_meta
             
             # ===== Step 5: 执行下单 =====
             top_symbols = self._select_top_k(predictions)
@@ -307,18 +333,61 @@ class QlibMLStrategy(Strategy):
         """
         获取所有候选股票的历史数据。
 
+        优先使用本地 Parquet 缓存，如果缓存不足才从 API 获取。
+
         Returns:
             {symbol: DataFrame} 字典，如果失败返回 None
         """
-        assets = [Asset(symbol=s) for s in self.symbols]
+        from datetime import timedelta
 
         # 计算需要的 K 线数量（5 分钟数据每天 78 根）
         bars_per_day = 78  # 390 / 5 = 78
         min_required_bars = 30  # 至少需要 30 根 5 分钟 K 线
         requested_bars = max(int(self.lookback_period * bars_per_day), min_required_bars)
 
+        # 计算时间范围
+        current_time = self.get_datetime()
+        start_date = current_time - timedelta(days=requested_bars // bars_per_day + 2)
+        end_date = current_time
+
+        # ========== Step 1: 尝试从本地缓存加载 ==========
         try:
-            histories = self.get_historical_prices_for_assets文件(
+            adapter = QlibDataAdapter(interval="5min")
+            cached_data = adapter.load_data(
+                symbols=self.symbols,
+                start_date=start_date,
+                end_date=end_date
+            )
+
+            # 检查缓存数据是否足够
+            if not cached_data.empty:
+                # 转换 MultiIndex DataFrame 到 {symbol: DataFrame} 格式
+                market_data = {}
+                for symbol in self.symbols:
+                    if symbol in cached_data.index.get_level_values("symbol"):
+                        symbol_df = cached_data.xs(symbol, level="symbol")
+                        if len(symbol_df) >= min_required_bars:
+                            market_data[symbol] = symbol_df
+                        else:
+                            self.log_message(f"{symbol} 缓存数据不足: {len(symbol_df)} bars")
+
+                if market_data:
+                    self.log_message(f"✓ 从本地缓存加载 {len(market_data)} 个股票数据")
+                    return market_data
+                else:
+                    self.log_message("缓存数据不满足要求，将从 API 获取")
+            else:
+                self.log_message("未找到本地缓存，将从 API 获取")
+
+        except Exception as e:
+            self.log_message(f"缓存加载失败: {e}，将从 API 获取")
+
+        # ========== Step 2: 从 API 获取数据 ==========
+        assets = [Asset(symbol=s) for s in self.symbols]
+
+        try:
+            self.log_message(f"⏳ 从 API 获取数据 (需要 {requested_bars} 根 K 线)...")
+            histories = self.get_historical_prices_for_assets(
                 assets, requested_bars, "5 minutes"
             )
         except Exception as e:
@@ -344,7 +413,6 @@ class QlibMLStrategy(Strategy):
                 # 使用适配器标准化数据格式
                 df = lumibot_to_qlib(history, symbol=symbol)
 
-                # 不再需要 resample，因为直接获取的就是 5 分钟数据
                 if len(df) >= 30:
                     market_data[symbol] = df
                 else:
@@ -352,6 +420,36 @@ class QlibMLStrategy(Strategy):
 
             except Exception as e:
                 self.log_message(f"{symbol} 数据处理失败: {e}")
+
+        # ========== Step 3: 保存到缓存（增量更新）==========
+        if market_data:
+            try:
+                adapter = QlibDataAdapter(interval="5min")
+
+                # 将 {symbol: DataFrame} 转换为统一的 DataFrame
+                all_dfs = []
+                for symbol, df in market_data.items():
+                    df_copy = df.copy()
+                    df_copy["symbol"] = symbol
+                    df_copy = df_copy.reset_index()
+                    all_dfs.append(df_copy)
+
+                if all_dfs:
+                    combined_df = pd.concat(all_dfs, ignore_index=True)
+
+                    # 设置 MultiIndex
+                    if "timestamp" in combined_df.columns:
+                        combined_df = combined_df.set_index(["timestamp", "symbol"])
+                    elif "index" in combined_df.columns:
+                        combined_df = combined_df.rename(columns={"index": "timestamp"})
+                        combined_df = combined_df.set_index(["timestamp", "symbol"])
+
+                    # 转换并存储（使用 append 模式）
+                    result = adapter._convert_and_store(combined_df, update_mode="append")
+                    if result.get("status") == "success":
+                        self.log_message(f"✓ 已缓存 {len(market_data)} 个股票数据到本地")
+            except Exception as e:
+                self.log_message(f"缓存保存失败: {e}")
 
         return market_data if market_data else None
 
@@ -646,6 +744,7 @@ class QlibMLStrategy(Strategy):
         """Get current prediction summary (for frontend display)."""
         return {
             "predictions": self.current_predictions,
+            "prediction_meta": self.current_prediction_meta,
             "top_k": self.top_k,
             "model_loaded": self.inference_engine is not None and self.inference_engine.is_loaded,
         }

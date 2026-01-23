@@ -155,7 +155,14 @@ class AlpacaDataProvider(BaseDataProvider):
             # Alpaca 返回的是 (symbol, datetime)，需要交换
             df = df.reset_index()
             if "symbol" in df.columns and "timestamp" in df.columns:
-                df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.tz_localize(None)
+                # 保留时区信息，转换为 UTC
+                df["timestamp"] = pd.to_datetime(df["timestamp"])
+                if df["timestamp"].dt.tz is None:
+                    # 如果没有时区信息，假设是 UTC
+                    df["timestamp"] = df["timestamp"].dt.tz_localize("UTC")
+                else:
+                    # 转换为 UTC
+                    df["timestamp"] = df["timestamp"].dt.tz_convert("UTC")
                 df = df.set_index(["timestamp", "symbol"])
                 df = df.sort_index()
 

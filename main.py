@@ -8,6 +8,31 @@ AutoTrade 主入口点。
 import logging
 import os
 import sys
+from datetime import datetime
+
+
+class ETFormatter(logging.Formatter):
+    """自定义日志格式化器，使用美东时间"""
+
+    def __init__(self, fmt=None, datefmt=None):
+        super().__init__(fmt, datefmt)
+        self.tz = None
+
+    def formatTime(self, record, datefmt=None):
+        # 创建 UTC 时间
+        ct = self.converter(record.created)
+        # 转换为 datetime 对象
+        dt = datetime.utcfromtimestamp(record.created)
+
+        try:
+            # 转换为美东时间
+            from autotrade.utils.timezone import utc_to_et
+            et_dt = utc_to_et(dt)
+            # 格式化时间
+            return et_dt.strftime("%Y-%m-%d %H:%M:%S") + " ET"
+        except Exception:
+            # 如果转换失败，使用默认格式
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def setup_main_logger() -> logging.Logger:
@@ -22,9 +47,8 @@ def setup_main_logger() -> logging.Logger:
         console_handler.setLevel(logging.INFO)
 
         # 日志格式：包含时间戳、级别、模块名、消息
-        formatter = logging.Formatter(
+        formatter = ETFormatter(
             fmt="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
         )
         console_handler.setFormatter(formatter)
         logger.addHandler(console_handler)

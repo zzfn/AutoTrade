@@ -99,3 +99,102 @@ const useWebSocket = (url) => {
 
   return { data, status };
 };
+
+// 格式化时间为美东时间（Eastern Time）
+// 支持的时间格式：ISO字符串、Date对象、UTC时间字符串
+const formatETTime = (timestamp) => {
+  if (!timestamp) return "-";
+
+  try {
+    let date;
+    if (typeof timestamp === 'string') {
+      // 处理 UTC 时间字符串（如 "2025-01-15T14:30:00.123456"）
+      if (timestamp.includes('T')) {
+        date = new Date(timestamp);
+      } else {
+        date = new Date(timestamp);
+      }
+    } else if (timestamp instanceof Date) {
+      date = timestamp;
+    } else {
+      return "-";
+    }
+
+    // 检查日期是否有效
+    if (isNaN(date.getTime())) {
+      console.warn('Invalid date:', timestamp);
+      return "-";
+    }
+
+    // 格式化为美东时间
+    const etFormatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    });
+
+    // 获取美东时间字符串
+    const etTime = etFormatter.format(date);
+
+    // 判断是 EDT 还是 EST
+    const stdFormatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      timeZoneName: 'short'
+    });
+    const parts = stdFormatter.formatToParts(date);
+    const timeZoneName = parts.find(p => p.type === 'timeZoneName')?.value || 'ET';
+
+    // 返回格式：2025-01-15 09:30:00 ET
+    return `${etTime} ${timeZoneName}`;
+  } catch (error) {
+    console.error('Error formatting time:', error, timestamp);
+    return "-";
+  }
+};
+
+// 格式化时间为美东时间（仅时分秒）
+const formatETTimeShort = (timestamp) => {
+  if (!timestamp) return "-";
+
+  try {
+    let date;
+    if (typeof timestamp === 'string') {
+      date = new Date(timestamp);
+    } else if (timestamp instanceof Date) {
+      date = timestamp;
+    } else {
+      return "-";
+    }
+
+    if (isNaN(date.getTime())) {
+      return "-";
+    }
+
+    const etFormatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    });
+
+    const etTime = etFormatter.format(date);
+
+    const stdFormatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      timeZoneName: 'short'
+    });
+    const parts = stdFormatter.formatToParts(date);
+    const timeZoneName = parts.find(p => p.type === 'timeZoneName')?.value || 'ET';
+
+    return `${etTime} ${timeZoneName}`;
+  } catch (error) {
+    console.error('Error formatting time:', error, timestamp);
+    return "-";
+  }
+};

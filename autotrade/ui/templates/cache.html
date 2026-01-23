@@ -1,0 +1,374 @@
+{% extends "layout.html" %} {% block content %}
+<div id="cache-root"></div>
+{% endblock %} {% block scripts %}
+<script type="text/babel">
+  {% raw %}
+  const CachePage = () => {
+    const [cacheInfo, setCacheInfo] = React.useState(null);
+    const [loading, setLoading] = React.useState(true);
+    const [error, setError] = React.useState(null);
+    const [selectedInterval, setSelectedInterval] = React.useState("5min");
+
+    // 数据同步相关状态
+    const [syncInProgress, setSyncInProgress] = React.useState(false);
+
+    // 加载缓存信息
+    const loadCacheInfo = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const res = await fetch("/api/data/cache");
+        const data = await res.json();
+
+        if (data.status === "success") {
+          setCacheInfo(data.cache_info);
+          // 如果当前选择的频率没有数据，选择第一个有数据的频率
+          if (data.cache_info && Object.keys(data.cache_info).length > 0) {
+            if (!data.cache_info[selectedInterval]) {
+              setSelectedInterval(Object.keys(data.cache_info)[0]);
+            }
+          }
+        } else {
+          setError(data.error || "加载失败");
+        }
+      } catch (e) {
+        console.error("加载缓存信息失败:", e);
+        setError("加载缓存信息失败: " + e.message);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    // 检查同步状态
+    const checkSyncStatus = async () => {
+      try {
+        const res = await fetch("/api/data/sync/status");
+        const status = await res.json();
+        setSyncInProgress(status?.in_progress || false);
+      } catch (e) {
+        console.error("检查同步状态失败:", e);
+      }
+    };
+
+    React.useEffect(() => {
+      loadCacheInfo();
+      checkSyncStatus();
+      const interval = setInterval(() => {
+        loadCacheInfo();
+        checkSyncStatus();
+      }, 10000); // 每10秒刷新
+      return () => clearInterval(interval);
+    }, []);
+
+    // 启动数据同步
+    const handleDataSync = async () => {
+      try {
+        await fetch("/api/data/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        checkSyncStatus();
+      } catch (e) {
+        console.error("启动数据同步失败:", e);
+      }
+    };
+
+    // 格式化文件大小
+    const formatFileSize = (sizeMb) => {
+      if (sizeMb < 1) {
+        return `${(sizeMb * 1024).toFixed(2)} KB`;
+      }
+      return `${sizeMb.toFixed(2)} MB`;
+    };
+
+    // 计算时间跨度
+    const calculateTimeSpan = (startDate, endDate) => {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      const diffTime = Math.abs(end - start);
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      const diffHours = Math.ceil(diffTime / (1000 * 60 * 60));
+
+      if (diffDays > 365) {
+        return `${(diffDays / 365).toFixed(1)} 年`;
+      } else if (diffDays > 30) {
+        return `${(diffDays / 30).toFixed(1)} 个月`;
+      } else if (diffDays > 0) {
+        return `${diffDays} 天`;
+      } else {
+        return `${diffHours} 小时`;
+      }
+    };
+
+    // 频率标签映射
+    const intervalLabels = {
+      "1min": "1 分钟",
+      "5min": "5 分钟",
+      "15min": "15 分钟",
+      "30min": "30 分钟",
+      "1h": "1 小时",
+      "4h": "4 小时",
+      "1d": "1 天",
+    };
+
+    if (loading) {
+      return (
+        <div className="flex items-center justify-center h-64">
+          <div className="flex flex-col items-center gap-4">
+            <div className="w-8 h-8 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin"></div>
+            <div className="text-slate-400 text-sm font-medium">加载中...</div>
+          </div>
+        </div>
+      );
+    }
+
+    if (error) {
+      return (
+        <div className="space-y-6">
+          <header className="mb-8 flex items-center justify-between">
+            <div>
+              <h2 className="text-2xl font-bold text-slate-100 flex items-center gap-3">
+                💾 缓存管理
+              </h2>
+              <p className="text-slate-400 mt-2">
+                查看本地 Parquet 数据缓存，运行回测后数据会自动缓存。
+              </p>
+            </div>
+          </header>
+
+          <div className="p-6 bg-red-500/10 border border-red-500/30 rounded-xl">
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">⚠️</span>
+              <div>
+                <div className="text-red-400 font-bold">加载失败</div>
+                <div className="text-red-300/70 text-sm mt-1">{error}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // 没有缓存数据
+    if (!cacheInfo || Object.keys(cacheInfo).length === 0) {
+      return (
+        <div className="space-y-6">
+          <header className="mb-8 flex items-center justify-between">
+            <div>
+              <h2 className="text-2xl font-bold text-slate-100 flex items-center gap-3">
+                💾 缓存管理
+              </h2>
+              <p className="text-slate-400 mt-2">
+                查看本地 Parquet 数据缓存，运行回测后数据会自动缓存。
+              </p>
+            </div>
+
+            <button
+              onClick={handleDataSync}
+              disabled={syncInProgress}
+              className={`px-6 py-3 rounded-xl font-bold text-sm transition-all flex items-center gap-2 ${
+                syncInProgress
+                  ? "bg-slate-800 text-slate-500 cursor-not-allowed"
+                  : "bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-lg shadow-cyan-500/20 hover:shadow-cyan-500/40 hover:scale-[1.01]"
+              }`}
+            >
+              {syncInProgress ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-slate-500 border-t-transparent rounded-full animate-spin"></div>
+                  正在同步...
+                </>
+              ) : (
+                <>📥 同步数据</>
+              )}
+            </button>
+          </header>
+
+          <div className="p-12 bg-slate-800/20 border border-dashed border-slate-700/50 rounded-2xl text-center">
+            <div className="w-16 h-16 rounded-full bg-slate-800 flex items-center justify-center mx-auto mb-4">
+              <span className="text-2xl">📭</span>
+            </div>
+            <h3 className="text-lg font-bold text-slate-300">暂无缓存数据</h3>
+            <p className="text-sm text-slate-500 max-w-sm mt-2">
+              当前没有任何 Parquet 缓存文件。运行回测后，数据会自动缓存到本地，或者使用右上角"同步数据"功能。
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    // 计算统计信息
+    const currentData = cacheInfo[selectedInterval] || [];
+    const totalRecords = currentData.reduce((sum, item) => sum + item.record_count, 0);
+    const totalSize = currentData.reduce((sum, item) => sum + item.file_size_mb, 0);
+
+    return (
+      <div className="space-y-6">
+        <header className="mb-8 flex items-center justify-between">
+          <div>
+            <h2 className="text-2xl font-bold text-slate-100 flex items-center gap-3">
+              💾 缓存管理
+            </h2>
+            <p className="text-slate-400 mt-2">
+              查看本地 Parquet 数据缓存，运行回测后数据会自动缓存。
+            </p>
+          </div>
+
+          <button
+            onClick={handleDataSync}
+            disabled={syncInProgress}
+            className={`px-6 py-3 rounded-xl font-bold text-sm transition-all flex items-center gap-2 ${
+              syncInProgress
+                ? "bg-slate-800 text-slate-500 cursor-not-allowed"
+                : "bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-lg shadow-cyan-500/20 hover:shadow-cyan-500/40 hover:scale-[1.01]"
+            }`}
+          >
+            {syncInProgress ? (
+              <>
+                <div className="w-4 h-4 border-2 border-slate-500 border-t-transparent rounded-full animate-spin"></div>
+                正在同步...
+              </>
+            ) : (
+              <>📥 同步数据</>
+            )}
+          </button>
+        </header>
+
+        {/* 频率选择器 */}
+        <div className="flex flex-wrap gap-2">
+          {Object.keys(cacheInfo).map((interval) => (
+            <button
+              key={interval}
+              onClick={() => setSelectedInterval(interval)}
+              className={`px-4 py-2 rounded-lg font-medium text-sm transition-all ${
+                selectedInterval === interval
+                  ? "bg-cyan-500 text-white shadow-lg shadow-cyan-500/20"
+                  : "bg-slate-800 text-slate-400 hover:bg-slate-700"
+              }`}
+            >
+              {intervalLabels[interval] || interval}
+            </button>
+          ))}
+        </div>
+
+        {/* 统计摘要 */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="p-4 bg-gradient-to-br from-cyan-500/10 to-blue-500/10 rounded-xl border border-cyan-500/20">
+            <div className="text-[10px] text-cyan-400 font-bold uppercase mb-1">数据频率</div>
+            <div className="text-xl font-black text-cyan-300">
+              {intervalLabels[selectedInterval] || selectedInterval}
+            </div>
+          </div>
+
+          <div className="p-4 bg-gradient-to-br from-purple-500/10 to-pink-500/10 rounded-xl border border-purple-500/20">
+            <div className="text-[10px] text-purple-400 font-bold uppercase mb-1">股票数量</div>
+            <div className="text-xl font-black text-purple-300">{currentData.length}</div>
+          </div>
+
+          <div className="p-4 bg-gradient-to-br from-amber-500/10 to-orange-500/10 rounded-xl border border-amber-500/20">
+            <div className="text-[10px] text-amber-400 font-bold uppercase mb-1">总数据点</div>
+            <div className="text-xl font-black text-amber-300">
+              {totalRecords.toLocaleString()}
+            </div>
+          </div>
+
+          <div className="p-4 bg-gradient-to-br from-emerald-500/10 to-teal-500/10 rounded-xl border border-emerald-500/20">
+            <div className="text-[10px] text-emerald-400 font-bold uppercase mb-1">总大小</div>
+            <div className="text-xl font-black text-emerald-300">
+              {formatFileSize(totalSize)}
+            </div>
+          </div>
+        </div>
+
+        {/* 数据表格 */}
+        <Card title={`${intervalLabels[selectedInterval] || selectedInterval} 缓存详情`} className="overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-700/50">
+                  <th className="text-left py-3 px-4 text-slate-400 font-bold text-xs uppercase tracking-wider">
+                    股票代码
+                  </th>
+                  <th className="text-left py-3 px-4 text-slate-400 font-bold text-xs uppercase tracking-wider">
+                    开始时间
+                  </th>
+                  <th className="text-left py-3 px-4 text-slate-400 font-bold text-xs uppercase tracking-wider">
+                    结束时间
+                  </th>
+                  <th className="text-left py-3 px-4 text-slate-400 font-bold text-xs uppercase tracking-wider">
+                    时间跨度
+                  </th>
+                  <th className="text-right py-3 px-4 text-slate-400 font-bold text-xs uppercase tracking-wider">
+                    数据点数量
+                  </th>
+                  <th className="text-right py-3 px-4 text-slate-400 font-bold text-xs uppercase tracking-wider">
+                    文件大小
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {currentData.map((item, idx) => (
+                  <tr
+                    key={item.symbol}
+                    className={`border-b border-slate-700/30 hover:bg-slate-700/20 transition-colors ${
+                      idx % 2 === 0 ? "bg-slate-800/20" : ""
+                    }`}
+                  >
+                    <td className="py-3 px-4">
+                      <span className="inline-flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-cyan-500"></span>
+                        <span className="font-mono font-bold text-cyan-300">{item.symbol}</span>
+                      </span>
+                    </td>
+                    <td className="py-3 px-4 text-slate-300 font-mono text-xs">
+                      {item.start_date}
+                    </td>
+                    <td className="py-3 px-4 text-slate-300 font-mono text-xs">
+                      {item.end_date}
+                    </td>
+                    <td className="py-3 px-4">
+                      <span className="inline-flex items-center px-2 py-1 rounded bg-slate-700/50 text-slate-300 text-xs">
+                        📅 {calculateTimeSpan(item.start_date, item.end_date)}
+                      </span>
+                    </td>
+                    <td className="py-3 px-4 text-right">
+                      <span className="font-mono text-amber-300">
+                        {item.record_count.toLocaleString()}
+                      </span>
+                    </td>
+                    <td className="py-3 px-4 text-right">
+                      <span className="font-mono text-emerald-300">
+                        {formatFileSize(item.file_size_mb)}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+
+        {/* 操作提示 */}
+        <div className="p-4 bg-blue-500/10 border border-blue-500/20 rounded-xl">
+          <div className="flex items-start gap-3">
+            <span className="text-xl">💡</span>
+            <div className="flex-1">
+              <div className="text-sm font-bold text-blue-300">缓存说明</div>
+              <div className="text-xs text-blue-200/70 mt-1 space-y-1">
+                <div>• 缓存文件保存在 <code className="px-1.5 py-0.5 bg-slate-800 rounded text-blue-300 font-mono">datasets/{selectedInterval}/</code> 目录</div>
+                <div>• 运行回测时会自动使用缓存数据，大幅提升速度</div>
+                <div>• 每个股票的缓存文件格式: <code className="px-1.5 py-0.5 bg-slate-800 rounded text-blue-300 font-mono">SYMBOL_INTERVAL.parquet</code></div>
+                <div>• 支持时间范围过滤：即使缓存包含更长时间范围，也能提取所需时间段</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const root = ReactDOM.createRoot(document.getElementById("cache-root"));
+  root.render(<CachePage />);
+  {% endraw %}
+</script>
+{% endblock %}

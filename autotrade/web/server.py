@@ -25,7 +25,7 @@ from fastapi.templating import Jinja2Templates
 from lumibot.brokers import Alpaca
 from lumibot.traders import Trader
 
-from autotrade.qlib_ml_strategy import QlibMLStrategy
+from autotrade.alpha_strategy import AlphaStrategy
 from autotrade.ml import ModelManager
 from autotrade.web.backtest_tasks import create_task, get_task, init_db, run_worker_loop
 
@@ -40,11 +40,34 @@ class LumiwealthFilter(logging.Filter):
             return False
         return True
 
+# 自定义日志格式化器，使用美东时间
+class ETFormatter(logging.Formatter):
+    """自定义日志格式化器，使用美东时间"""
+
+    def formatTime(self, record, datefmt=None):
+        # 创建 UTC 时间
+        dt = datetime.utcfromtimestamp(record.created)
+
+        try:
+            # 转换为美东时间
+            from autotrade.utils.timezone import utc_to_et
+            et_dt = utc_to_et(dt)
+            # 格式化时间
+            return et_dt.strftime("%Y-%m-%d %H:%M:%S") + " ET"
+        except Exception:
+            # 如果转换失败，使用默认格式
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
+
+# 设置美东时间格式化器
+for handler in logging.getLogger().handlers:
+    handler.setFormatter(ETFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
 
 # 为所有 logger 添加过滤器
 logging.getLogger().addFilter(LumiwealthFilter())
@@ -112,6 +135,8 @@ training_status = {
     "message": "",
     # Walk-Forward 验证进度（可选）
     "walk_forward_progress": None,  # { current_window, total_windows, window_results, aggregated }
+    # 数据时间范围
+    "data_range": None,  # { start_date, end_date, symbols, interval, num_bars }
 }
 
 # 数据同步状态
@@ -198,15 +223,13 @@ def initialize_and_start() -> dict:
                             if "lookback_period" in data_conf:
                                 lookback_period = data_conf["lookback_period"]
 
-                        # 从 strategy.ml 读取策略参数
-                        if "strategy" in config and "ml" in config["strategy"]:
-                            ml_conf = config["strategy"]["ml"]
-                            if "top_k" in ml_conf:
-                                top_k = ml_conf["top_k"]
-                            if "sleeptime" in ml_conf:
-                                sleeptime = ml_conf["sleeptime"]
-                            if "interval" in ml_conf:
-                                interval = ml_conf["interval"]
+                        # 从 strategy 读取策略参数
+                        if "strategy" in config:
+                            strat_conf = config["strategy"]
+                            if "top_k" in strat_conf:
+                                top_k = strat_conf["top_k"]
+                            if "sleeptime" in strat_conf:
+                                sleeptime = strat_conf["sleeptime"]
 
                         log_message(f"从配置文件加载: symbols={len(symbols)}, interval={interval}, lookback={lookback_period}d")
             else:
@@ -238,8 +261,8 @@ def initialize_and_start() -> dict:
             "lookback_period": lookback_period,
         }
 
-        strategy = QlibMLStrategy(broker=broker, parameters=strategy_params)
-        log_message(f"使用 QlibMLStrategy，模型: {model_name or '默认'}")
+        strategy = AlphaStrategy(broker=broker, parameters=strategy_params)
+        log_message(f"使用 AlphaStrategy，模型: {model_name or '默认'}")
 
         # 5. Create Trader and register
         trader_instance = Trader()
@@ -584,6 +607,7 @@ def start_strategy(runner=None) -> bool:
                                 predictions = summary.get("predictions", {})
                                 top_k_val = summary.get("top_k", 3)
                                 model_loaded = summary.get("model_loaded", False)
+                                prediction_meta = summary.get("prediction_meta", {})
 
                                 if predictions:
                                     sorted_preds = sorted(
@@ -592,11 +616,15 @@ def start_strategy(runner=None) -> bool:
                                         reverse=True
                                     )
                                     for rank, (symbol, score) in enumerate(sorted_preds, 1):
+                                        meta = prediction_meta.get(symbol, {})
                                         signals_data.append({
                                             "symbol": symbol,
                                             "score": float(score),
                                             "rank": rank,
                                             "is_top_k": rank <= top_k_val,
+                                            "price": meta.get("price"),
+                                            "price_time": meta.get("price_time"),
+                                            "time": meta.get("prediction_time"),
                                         })
 
                                 state["model_loaded"] = model_loaded
@@ -665,7 +693,7 @@ def set_ml_config_internal(config: dict) -> dict:
 def get_strategy_config_internal() -> dict:
     """获取当前策略配置"""
     return {
-        "strategy_type": "qlib_ml",
+        "strategy_type": "alpha",
         "ml_config": ml_config.copy(),
         "is_running": is_running,
         "status": state["status"],
@@ -730,6 +758,7 @@ def start_model_training_internal(config: dict = None) -> dict:
             yaml_target_horizon = 60
             yaml_valid_bars = None
             yaml_num_bars = None
+            yaml_end_date = None
 
             if os.path.exists(config_path):
                 try:
@@ -737,14 +766,19 @@ def start_model_training_internal(config: dict = None) -> dict:
                         yaml_config = yaml.safe_load(f)
                         if yaml_config:
                             if "data" in yaml_config:
+                                if "symbols" in yaml_config["data"]:
+                                    yaml_symbols = yaml_config["data"]["symbols"]
                                 if "interval" in yaml_config["data"]:
                                     yaml_interval = yaml_config["data"]["interval"]
                                 if "valid_bars" in yaml_config["data"]:
                                     yaml_valid_bars = yaml_config["data"]["valid_bars"]
                                 if "num_bars" in yaml_config["data"]:
                                     yaml_num_bars = yaml_config["data"]["num_bars"]
-                            if "model" in yaml_config and "target_horizon" in yaml_config["model"]:
-                                yaml_target_horizon = yaml_config["model"]["target_horizon"]
+                            if "model" in yaml_config:
+                                if "target_horizon" in yaml_config["model"]:
+                                    yaml_target_horizon = yaml_config["model"]["target_horizon"]
+                                if "end_date" in yaml_config["model"]:
+                                    yaml_end_date = yaml_config["model"]["end_date"]
                             if "rolling_update" in yaml_config:
                                 if "interval" in yaml_config["rolling_update"]:
                                     yaml_interval = yaml_config["rolling_update"].get("interval", yaml_interval)
@@ -754,7 +788,7 @@ def start_model_training_internal(config: dict = None) -> dict:
                     log_message(f"Error reading YAML config: {e}")
 
             train_config = config or {}
-            symbols = train_config.get("symbols", ["SPY", "AAPL", "MSFT"])
+            symbols = train_config.get("symbols", yaml_symbols or ["SPY", "AAPL", "MSFT"])
             # 默认读取配置中的 num_bars，避免多标的时全局裁剪过度
             num_bars = train_config.get("num_bars", yaml_num_bars or 20000)
             target_horizon = train_config.get("target_horizon", yaml_target_horizon)
@@ -780,8 +814,18 @@ def start_model_training_internal(config: dict = None) -> dict:
             # 计算需要的时间范围（额外加 50% buffer 确保足够数据）
             days_needed = int(num_bars / bars_per_day * 1.5) + 30
 
+            # 设置训练数据的截止日期（支持配置）
+            if yaml_end_date:
+                try:
+                    end_date = datetime.strptime(yaml_end_date, "%Y-%m-%d")
+                    log_message(f"使用配置的训练数据截止日期: {yaml_end_date}")
+                except ValueError as e:
+                    log_message(f"配置的 end_date 格式错误 ({yaml_end_date})，使用当前时间: {e}")
+                    end_date = datetime.now()
+            else:
+                end_date = datetime.now()
+
             adapter = QlibDataAdapter(interval=interval)
-            end_date = datetime.now()
             start_date = end_date - timedelta(days=days_needed)
 
             try:
@@ -793,7 +837,20 @@ def start_model_training_internal(config: dict = None) -> dict:
 
             df = adapter.load_data(symbols, start_date, end_date)
             training_status["progress"] = 20
-            
+
+            # 记录数据时间范围到训练状态
+            from autotrade.utils.timezone import format_et_time
+            training_status["data_range"] = {
+                "start_date": start_date.strftime("%Y-%m-%d"),
+                "end_date": end_date.strftime("%Y-%m-%d"),
+                "symbols": symbols,
+                "interval": interval,
+                "num_bars": num_bars,
+                "actual_bars": len(df),
+                "start_date_et": format_et_time(start_date),
+                "end_date_et": format_et_time(end_date),
+            }
+
             # 记录实际获取的数据量
             log_message(f"加载数据完成: {len(df)} 根K线 (目标: {num_bars}, interval: {interval}, days: {days_needed})")
             if df.empty or len(df) < min_valid_bars:
@@ -872,15 +929,19 @@ def start_model_training_internal(config: dict = None) -> dict:
             if data_length >= MIN_BARS_REQUIRED:
                 # 数据充足：执行 Walk-Forward 验证
                 from autotrade.ml.trainer import WalkForwardValidator
-                
-                training_status["message"] = "开始 Walk-Forward 验证..."
-                log_message(f"数据长度 {data_length} >= {MIN_BARS_REQUIRED}，执行 Walk-Forward 验证")
-                
+
                 # 计算窗口数量
                 train_window = WALK_FORWARD_CONFIG["train_window"]
                 test_window = WALK_FORWARD_CONFIG["test_window"]
                 step_size = WALK_FORWARD_CONFIG["step_size"]
                 total_windows = max(1, (data_length - train_window - test_window) // step_size + 1)
+
+                training_status["message"] = "开始 Walk-Forward 验证..."
+                log_message(
+                    f"数据长度 {data_length} >= {MIN_BARS_REQUIRED}，执行 Walk-Forward 验证\n"
+                    f"  配置: 训练窗口={train_window}, 测试窗口={test_window}, 步长={step_size}\n"
+                    f"  预计窗口数: {total_windows}"
+                )
                 
                 # 初始化 walk_forward_progress
                 training_status["walk_forward_progress"] = {
@@ -944,7 +1005,15 @@ def start_model_training_internal(config: dict = None) -> dict:
                             "status": "success",
                         }
                         
-                        log_message(f"窗口 {fold}: IC={fold_metrics.get('ic', 0):.4f}, ICIR={fold_metrics.get('icir', 0):.4f}")
+                        train_samples = len(X_train)
+                        test_samples = len(X_test)
+                        log_message(
+                            f"窗口 {fold}/{total_windows}: "
+                            f"训练集 [{start_idx}:{train_end}] ({train_samples}样本) | "
+                            f"测试集 [{train_end}:{test_end}] ({test_samples}样本) | "
+                            f"IC={fold_metrics.get('ic', 0):.4f}, ICIR={fold_metrics.get('icir', 0):.4f}, "
+                            f"MSE={fold_metrics.get('mse', 0):.6f}"
+                        )
                     except Exception as fold_e:
                         # 单个窗口失败不影响整体
                         fold_result = {
@@ -988,6 +1057,19 @@ def start_model_training_internal(config: dict = None) -> dict:
                 
                 training_status["progress"] = 90
                 training_status["message"] = "使用全部数据训练最终模型..."
+
+                # 输出 Walk-Forward 验证汇总
+                successful = [r for r in window_results if r.get("status") == "success"]
+                if successful:
+                    ic_values = [r["ic"] for r in successful]
+                    icir_values = [r["icir"] for r in successful]
+                    log_message(
+                        f"\nWalk-Forward 验证完成 (成功 {len(successful)}/{len(window_results)} 窗口):\n"
+                        f"  IC:   均值={np.mean(ic_values):.4f}, 标准差={np.std(ic_values):.4f}, "
+                        f"最小={np.min(ic_values):.4f}, 最大={np.max(ic_values):.4f}\n"
+                        f"  ICIR: 均值={np.mean(icir_values):.4f}, 标准差={np.std(icir_values):.4f}, "
+                        f"最小={np.min(icir_values):.4f}, 最大={np.max(icir_values):.4f}"
+                    )
                 
                 # 使用全部数据训练最终模型
                 trainer = LightGBMTrainer(
@@ -1011,7 +1093,8 @@ def start_model_training_internal(config: dict = None) -> dict:
                     "ic": final_metrics["ic"],
                     "icir": final_metrics["icir"],
                     "trained_via_ui": True,
-                    "updated_at": datetime.now().isoformat(),
+                    "updated_at": format_et_time(datetime.now()),
+                    "updated_at_et": format_et_time(datetime.now()),
                     # Walk-Forward 验证结果
                     "walk_forward_validation": {
                         "enabled": True,
@@ -1072,7 +1155,8 @@ def start_model_training_internal(config: dict = None) -> dict:
                     "ic": metrics["ic"],
                     "icir": metrics["icir"],
                     "trained_via_ui": True,
-                    "updated_at": datetime.now().isoformat(),
+                    "updated_at": format_et_time(datetime.now()),
+                    "updated_at_et": format_et_time(datetime.now()),
                     "walk_forward_validation": {
                         "enabled": False,
                         "reason": f"数据不足（{data_length}/{MIN_BARS_REQUIRED}）",
@@ -1126,7 +1210,9 @@ def start_data_sync_internal(config: dict = None) -> dict:
             config_path = os.path.join(base_dir, "../config.yaml")
 
             yaml_interval = None
+            yaml_symbols = None
             yaml_num_bars = 20000
+            yaml_end_date = None
 
             if os.path.exists(config_path):
                 try:
@@ -1134,10 +1220,14 @@ def start_data_sync_internal(config: dict = None) -> dict:
                         yaml_config = yaml.safe_load(f)
                         if yaml_config:
                             if "data" in yaml_config:
+                                if "symbols" in yaml_config["data"]:
+                                    yaml_symbols = yaml_config["data"]["symbols"]
                                 if "interval" in yaml_config["data"]:
                                     yaml_interval = yaml_config["data"]["interval"]
                                 if "num_bars" in yaml_config["data"]:
                                     yaml_num_bars = yaml_config["data"]["num_bars"]
+                            if "model" in yaml_config and "end_date" in yaml_config["model"]:
+                                yaml_end_date = yaml_config["model"]["end_date"]
                             if "rolling_update" in yaml_config:
                                 if "interval" in yaml_config["rolling_update"]:
                                     yaml_interval = yaml_config["rolling_update"].get("interval", yaml_interval)
@@ -1147,7 +1237,7 @@ def start_data_sync_internal(config: dict = None) -> dict:
                     log_message(f"Error reading YAML config: {e}")
 
             sync_config = config or {}
-            symbols = sync_config.get("symbols", ["SPY", "AAPL", "MSFT"])
+            symbols = sync_config.get("symbols", yaml_symbols or ["SPY", "AAPL", "MSFT"])
             num_bars = sync_config.get("num_bars", yaml_num_bars)
             interval = sync_config.get("interval", yaml_interval or "1min")
             update_mode = sync_config.get("update_mode", "append")
@@ -1164,8 +1254,18 @@ def start_data_sync_internal(config: dict = None) -> dict:
             # 计算需要的时间范围
             days_needed = int(num_bars / bars_per_day * 1.5) + 30
 
+            # 设置数据同步的截止日期（支持配置）
+            if yaml_end_date:
+                try:
+                    end_date = datetime.strptime(yaml_end_date, "%Y-%m-%d")
+                    log_message(f"使用配置的数据同步截止日期: {yaml_end_date}")
+                except ValueError as e:
+                    log_message(f"配置的 end_date 格式错误 ({yaml_end_date})，使用当前时间: {e}")
+                    end_date = datetime.now()
+            else:
+                end_date = datetime.now()
+
             adapter = QlibDataAdapter(interval=interval)
-            end_date = datetime.now()
             start_date = end_date - timedelta(days=days_needed)
 
             data_sync_status["message"] = (
@@ -1199,6 +1299,8 @@ def start_data_sync_internal(config: dict = None) -> dict:
                                 "bars": symbol_bars,
                                 "start": min_time.strftime("%Y-%m-%d %H:%M") if hasattr(min_time, 'strftime') else str(min_time),
                                 "end": max_time.strftime("%Y-%m-%d %H:%M") if hasattr(max_time, 'strftime') else str(max_time),
+                                "start_et": format_et_time(min_time) if hasattr(min_time, 'strftime') else str(min_time),
+                                "end_et": format_et_time(max_time) if hasattr(max_time, 'strftime') else str(max_time),
                             })
                             log_message(f"  {symbol}: {symbol_bars} 根K线, 时间范围 {min_time} ~ {max_time}")
                     except Exception as e:
@@ -1214,11 +1316,13 @@ def start_data_sync_internal(config: dict = None) -> dict:
                         "bars": total_bars,
                         "start": min_time.strftime("%Y-%m-%d %H:%M") if hasattr(min_time, 'strftime') else str(min_time),
                         "end": max_time.strftime("%Y-%m-%d %H:%M") if hasattr(max_time, 'strftime') else str(max_time),
+                        "start_et": format_et_time(min_time) if hasattr(min_time, 'strftime') else str(min_time),
+                        "end_et": format_et_time(max_time) if hasattr(max_time, 'strftime') else str(max_time),
                     })
                     log_message(f"  {symbol}: {total_bars} 根K线, 时间范围 {min_time} ~ {max_time}")
 
             data_sync_status["progress"] = 100
-            data_sync_status["last_sync"] = datetime.now().isoformat()
+            data_sync_status["last_sync"] = format_et_time(datetime.now())
             data_sync_status["sync_details"] = sync_details
             data_sync_status["message"] = (
                 f"成功同步 {len(symbols)} 只股票的数据 ({interval}), 共 {total_bars} 根K线"
@@ -1255,7 +1359,7 @@ async def lifespan(app: FastAPI):
     策略由 run_strategy_main() 在主线程中运行。
     此 lifespan 仅处理清理逻辑。
     """
-    logger.info("FastAPI 服务器启动...（仅作为 UI 显示）")
+    logger.info("FastAPI 服务器启动...")
     init_db()
     global _backtest_worker_process
     if _backtest_worker_process is None or not _backtest_worker_process.is_alive():
@@ -1442,30 +1546,95 @@ async def get_data_config():
             "interval": "1min",
             "num_bars": 20000,
             "valid_bars": 2000,
-            "lookback_period": 300
+            "lookback_period": 300,
+            "end_date": None  # 模型训练数据截止日期
         }
 
         # 从配置文件读取
         if os.path.exists(config_path):
             with open(config_path, "r") as f:
                 yaml_config = yaml.safe_load(f)
-                if yaml_config and "data" in yaml_config:
-                    data_conf = yaml_config["data"]
-                    if "symbols" in data_conf:
-                        config["symbols"] = data_conf["symbols"]
-                    if "interval" in data_conf:
-                        config["interval"] = data_conf["interval"]
-                    if "num_bars" in data_conf:
-                        config["num_bars"] = data_conf["num_bars"]
-                    if "valid_bars" in data_conf:
-                        config["valid_bars"] = data_conf["valid_bars"]
-                    if "lookback_period" in data_conf:
-                        config["lookback_period"] = data_conf["lookback_period"]
+                if yaml_config:
+                    if "data" in yaml_config:
+                        data_conf = yaml_config["data"]
+                        if "symbols" in data_conf:
+                            config["symbols"] = data_conf["symbols"]
+                        if "interval" in data_conf:
+                            config["interval"] = data_conf["interval"]
+                        if "num_bars" in data_conf:
+                            config["num_bars"] = data_conf["num_bars"]
+                        if "valid_bars" in data_conf:
+                            config["valid_bars"] = data_conf["valid_bars"]
+                        if "lookback_period" in data_conf:
+                            config["lookback_period"] = data_conf["lookback_period"]
+                    if "model" in yaml_config and "end_date" in yaml_config["model"]:
+                        config["end_date"] = yaml_config["model"]["end_date"]
 
         return {"config": config}
     except Exception as e:
         logger.error(f"Error reading data config: {e}")
         return {"config": None, "error": str(e)}
+
+
+@app.get("/api/data/cache")
+async def get_data_cache_info():
+    """获取 Parquet 缓存数据信息"""
+    try:
+        from autotrade.data.qlib_adapter import QlibDataAdapter
+
+        # 支持的频率列表
+        intervals = ["1min", "5min", "15min", "30min", "1h", "4h", "1d"]
+
+        cache_info = {}
+
+        for interval in intervals:
+            adapter = QlibDataAdapter(interval=interval)
+            symbols = adapter.get_available_symbols()
+
+            if symbols:
+                cache_info[interval] = []
+                for symbol in symbols:
+                    date_range = adapter.get_date_range(symbol)
+                    if date_range:
+                        start_date, end_date = date_range
+
+                        # 计算数据点数量
+                        filepath = adapter.data_dir / f"{symbol}_{adapter.interval_suffix}.parquet"
+                        record_count = 0
+                        if filepath.exists():
+                            import pandas as pd
+                            try:
+                                df = pd.read_parquet(filepath)
+                                record_count = len(df)
+                            except:
+                                pass
+
+                        cache_info[interval].append({
+                            "symbol": symbol,
+                            "start_date": start_date.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                            "end_date": end_date.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                            "record_count": record_count,
+                            "file_path": str(filepath),
+                            "file_size_mb": round(filepath.stat().st_size / (1024 * 1024), 2) if filepath.exists() else 0
+                        })
+
+                # 按股票代码排序
+                cache_info[interval].sort(key=lambda x: x["symbol"])
+
+        return {
+            "status": "success",
+            "cache_info": cache_info,
+            "summary": {
+                "total_intervals": len(cache_info),
+                "total_symbols": sum(len(v) for v in cache_info.values())
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting cache info: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"status": "error", "error": str(e), "cache_info": {}}
 
 
 # ==================== 模型管理页面 ====================
@@ -1481,6 +1650,12 @@ async def models_page(request: Request):
 async def data_page(request: Request):
     """数据中心页面"""
     return templates.TemplateResponse(request, "data.html")
+
+
+@app.get("/cache", response_class=HTMLResponse)
+async def cache_page(request: Request):
+    """缓存管理页面"""
+    return templates.TemplateResponse(request, "cache.html")
 
 
 @app.websocket("/ws")
@@ -1634,14 +1809,12 @@ def run_strategy_main() -> dict:
                             if "lookback_period" in data_conf:
                                 lookback_period = data_conf["lookback_period"]
                         
-                        if "strategy" in config and "ml" in config["strategy"]:
-                            ml_conf = config["strategy"]["ml"]
-                            if "top_k" in ml_conf:
-                                top_k = ml_conf["top_k"]
-                            if "sleeptime" in ml_conf:
-                                sleeptime = ml_conf["sleeptime"]
-                            if "interval" in ml_conf:
-                                interval = ml_conf["interval"]
+                        if "strategy" in config:
+                            strat_conf = config["strategy"]
+                            if "top_k" in strat_conf:
+                                top_k = strat_conf["top_k"]
+                            if "sleeptime" in strat_conf:
+                                sleeptime = strat_conf["sleeptime"]
                         
                         log_message(f"从配置文件加载: symbols={len(symbols)}, interval={interval}, lookback={lookback_period}d")
             else:
@@ -1669,8 +1842,8 @@ def run_strategy_main() -> dict:
             "lookback_period": lookback_period,
         }
         
-        strategy = QlibMLStrategy(broker=broker, parameters=strategy_params)
-        log_message(f"使用 QlibMLStrategy，模型: {model_name or '默认'}")
+        strategy = AlphaStrategy(broker=broker, parameters=strategy_params)
+        log_message(f"使用 AlphaStrategy，模型: {model_name or '默认'}")
         
         # 5. 创建 Trader 并注册
         trader_instance = Trader()
@@ -1751,6 +1924,7 @@ def run_strategy_main() -> dict:
                                     predictions = summary.get("predictions", {})
                                     top_k_val = summary.get("top_k", 3)
                                     model_loaded = summary.get("model_loaded", False)
+                                    prediction_meta = summary.get("prediction_meta", {})
                                     
                                     if predictions:
                                         sorted_preds = sorted(
@@ -1759,11 +1933,15 @@ def run_strategy_main() -> dict:
                                             reverse=True
                                         )
                                         for rank, (symbol, score) in enumerate(sorted_preds, 1):
+                                            meta = prediction_meta.get(symbol, {})
                                             signals_data.append({
                                                 "symbol": symbol,
                                                 "score": float(score),
                                                 "rank": rank,
                                                 "is_top_k": rank <= top_k_val,
+                                                "price": meta.get("price"),
+                                                "price_time": meta.get("price_time"),
+                                                "time": meta.get("prediction_time"),
                                             })
                                     
                                     state["model_loaded"] = model_loaded

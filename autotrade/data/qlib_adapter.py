@@ -4,12 +4,11 @@ Qlib Data Adapter Module.
 Transforms Lumibot OHLCV DataFrame into Qlib-compatible Feature Tensor.
 Provides data management and storage capabilities for ML training.
 
-Tasks:
-- Implement data/qlib_adapter.py - Function to transform Lumibot OHLCV DataFrame
-- Migrate from research.data.qlib_adapter
+Storage Format: Parquet
+- File naming: {SYMBOL}_{INTERVAL}.parquet (e.g., AAPL_5MIN.parquet)
+- Directory: datasets/{interval}/
 """
 
-import pickle
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union
@@ -29,15 +28,28 @@ class QlibDataAdapter:
     1. Data transformation (format conversion)
     2. Data management (fetch, store, load)
 
+    Storage Format (Parquet):
+    - datasets/5min/AAPL_5MIN.parquet
+    - datasets/5min/MSFT_5MIN.parquet
+    - datasets/1d/AAPL_1D.parquet
+
     Lumibot's `get_historical_prices` returns a Bars object with a DataFrame
     that may have different column naming conventions and index structures.
-
-    This adapter ensures the data is properly formatted for Qlib feature generation
-    and model inference, with support for persistent storage and incremental updates.
     """
 
     # Standard Qlib column names (lowercase)
     STANDARD_COLUMNS = ["open", "high", "low", "close", "volume"]
+
+    # Interval mapping for filename
+    INTERVAL_MAP = {
+        "1min": "1MIN",
+        "5min": "5MIN",
+        "15min": "15MIN",
+        "30min": "30MIN",
+        "1h": "1H",
+        "4h": "4H",
+        "1d": "1D",
+    }
 
     # Common column name mappings
     COLUMN_MAPPINGS = {
@@ -86,20 +98,15 @@ class QlibDataAdapter:
         self.data_dir = self.base_dir / interval
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
-        # Subdirectories
-        self.instruments_dir = self.data_dir / "instruments"
-        self.features_dir = self.data_dir / "features"
-        self.calendars_dir = self.data_dir / "calendars"
-
-        for dir_path in [self.instruments_dir, self.features_dir, self.calendars_dir]:
-            dir_path.mkdir(parents=True, exist_ok=True)
-
         # Data provider
         self._provider = provider
 
         # Transformation attributes
         self.fill_missing = fill_missing
         self.validate = validate
+
+        # Get interval suffix for filename
+        self.interval_suffix = self.INTERVAL_MAP.get(interval, interval.upper())
 
     @property
     def provider(self) -> BaseDataProvider:
@@ -137,22 +144,30 @@ class QlibDataAdapter:
         if df.empty:
             return {"status": "error", "message": "未获取到数据"}
 
+        # 显示实际获取到的数据范围（带时区）
+        if isinstance(df.index, pd.MultiIndex):
+            actual_start = df.index.get_level_values("timestamp").min()
+            actual_end = df.index.get_level_values("timestamp").max()
+        else:
+            actual_start = df.index.min()
+            actual_end = df.index.max()
+
+        # 格式化时间显示时区
+        start_str = actual_start.strftime("%Y-%m-%d %H:%M:%S %Z")
+        end_str = actual_end.strftime("%Y-%m-%d %H:%M:%S %Z")
+        logger.info(f"实际获取到数据范围: {start_str} - {end_str}, 共 {len(df)} 条记录")
+
         # 2. Convert and store
         result = self._convert_and_store(df, update_mode)
-
-        # 3. Update calendar and instruments
-        self._update_calendar(df)
-        self._update_instruments(symbols, start_date, end_date)
 
         return result
 
     def _convert_and_store(self, df: pd.DataFrame, update_mode: str) -> dict:
         """
-        Convert DataFrame to Qlib format and store.
+        Convert DataFrame to Qlib format and store as Parquet.
 
-        Qlib format requirements:
-        - One directory per stock
-        - One .bin file per feature
+        Parquet format:
+        - One file per stock: {SYMBOL}_{INTERVAL}.parquet
         - Data sorted by time
         """
         processed_symbols = []
@@ -175,7 +190,7 @@ class QlibDataAdapter:
                 # Ensure time sorting
                 symbol_df = symbol_df.sort_index()
 
-                # Store in Qlib format
+                # Store in Parquet format
                 self._store_symbol_data(symbol, symbol_df, update_mode)
                 processed_symbols.append(symbol)
 
@@ -192,127 +207,60 @@ class QlibDataAdapter:
         self, symbol: str, df: pd.DataFrame, update_mode: str
     ) -> None:
         """
-        Store single stock data.
+        Store single stock data in Parquet format.
 
-        Qlib format:
-        - features/{symbol}/$open.bin
-        - features/{symbol}/$high.bin
-        - features/{symbol}/$low.bin
-        - features/{symbol}/$close.bin
-        - features/{symbol}/$volume.bin
+        File format: {SYMBOL}_{INTERVAL}.parquet (e.g., AAPL_5MIN.parquet)
+
+        Args:
+            symbol: Stock symbol
+            df: DataFrame with OHLCV data
+            update_mode: 'replace' or 'append'
         """
-        symbol_dir = self.features_dir / symbol
-        symbol_dir.mkdir(parents=True, exist_ok=True)
+        # Generate filename: AAPL_5MIN.parquet
+        filename = f"{symbol}_{self.interval_suffix}.parquet"
+        filepath = self.data_dir / filename
 
-        feature_cols = ["open", "high", "low", "close", "volume"]
-        dates_file = symbol_dir / "_dates.pkl"
+        # Ensure index is named
+        if df.index.name is None:
+            df.index.name = "timestamp"
+
+        # 如果有时区信息，转换为 UTC 并保留（parquet 会自动去掉时区，但我们会记住）
+        has_tz = df.index.tz is not None
+        if has_tz:
+            # 转换为 UTC 并去掉时区（存储为 naive datetime，但实际是 UTC）
+            df_to_store = df.copy()
+            df_to_store.index = df_to_store.index.tz_convert("UTC").tz_localize(None)
+        else:
+            df_to_store = df
 
         # Append mode: load existing data and merge
-        if update_mode == "append" and dates_file.exists():
-            # Load existing data as DataFrame
-            with open(dates_file, "rb") as f:
-                existing_dates = pickle.load(f)
+        if update_mode == "append" and filepath.exists():
+            try:
+                # Load existing data（作为 UTC）
+                old_df = pd.read_parquet(filepath)
+                old_df.index = old_df.index.tz_localize("UTC")
 
-            existing_data = {"timestamp": pd.to_datetime(existing_dates)}
-            for col in feature_cols:
-                feature_file = symbol_dir / f"${col}.bin"
-                if feature_file.exists():
-                    existing_data[col] = np.fromfile(feature_file, dtype=np.float32)
-
-            # Build existing data DataFrame
-            if len(existing_data.get("open", [])) == len(existing_dates):
-                old_df = pd.DataFrame(existing_data).set_index("timestamp")
                 # Prepare new data
-                new_df = df[feature_cols].copy()
-                new_df.index = pd.to_datetime(new_df.index)
+                new_df = df.copy()
+                if new_df.index.tz is None:
+                    new_df.index = new_df.index.tz_localize("UTC")
+                else:
+                    new_df.index = new_df.index.tz_convert("UTC")
+
                 # Merge: concat + deduplicate, keep new data (keep='last')
                 combined = pd.concat([old_df, new_df]).sort_index()
                 combined = combined[~combined.index.duplicated(keep="last")]
-                df = combined
 
-        # Save dates
-        with open(dates_file, "wb") as f:
-            pickle.dump(df.index.tolist(), f)
+                # 去掉时区后存储
+                df_to_store = combined.copy()
+                df_to_store.index = df_to_store.index.tz_localize(None)
 
-        # Save each feature
-        for col in feature_cols:
-            if col in df.columns:
-                feature_file = symbol_dir / f"${col}.bin"
-                df[col].values.astype(np.float32).tofile(feature_file)
+            except Exception as e:
+                logger.warning(f"加载现有数据失败，将覆盖: {e}")
 
-        logger.debug(f"存储 {symbol} 数据完成")
-
-    def _update_calendar(self, df: pd.DataFrame) -> None:
-        """Update trading calendar"""
-        if isinstance(df.index, pd.MultiIndex):
-            dates = df.index.get_level_values(0).unique()
-        else:
-            dates = df.index.unique()
-
-        # Select calendar file name based on frequency
-        if self.interval == "1d":
-            cal_name = "day.txt"
-            format_str = "%Y-%m-%d"
-        elif self.interval == "1min":
-            cal_name = "min.txt"
-            format_str = "%Y-%m-%d %H:%M:%S"
-        else:  # 1h or others
-            cal_name = "hour.txt"
-            format_str = "%Y-%m-%d %H:%M:%S"
-        calendar_file = self.calendars_dir / cal_name
-
-        # Load existing calendar
-        existing_dates = set()
-        if calendar_file.exists():
-            with open(calendar_file, "r") as f:
-                existing_dates = set(line.strip() for line in f)
-
-        # Merge and sort
-        all_dates = sorted(
-            existing_dates
-            | set(pd.to_datetime(d).strftime(format_str) for d in dates)
-        )
-
-        with open(calendar_file, "w") as f:
-            f.write("\n".join(all_dates))
-
-        logger.debug(f"更新日历 ({self.interval}): {len(all_dates)} 条记录")
-
-    def _update_instruments(
-        self, symbols: list[str], start_date: datetime, end_date: datetime
-    ) -> None:
-        """Update stock list"""
-        instruments_file = self.instruments_dir / "all.txt"
-
-        # Load existing list
-        existing_instruments = {}
-        if instruments_file.exists():
-            with open(instruments_file, "r") as f:
-                for line in f:
-                    parts = line.strip().split("\t")
-                    if len(parts) >= 3:
-                        existing_instruments[parts[0]] = (parts[1], parts[2])
-
-        # Update
-        start_str = start_date.strftime("%Y-%m-%d")
-        end_str = end_date.strftime("%Y-%m-%d")
-
-        for symbol in symbols:
-            if symbol in existing_instruments:
-                # Expand date range
-                old_start, old_end = existing_instruments[symbol]
-                new_start = min(old_start, start_str)
-                new_end = max(old_end, end_str)
-                existing_instruments[symbol] = (new_start, new_end)
-            else:
-                existing_instruments[symbol] = (start_str, end_str)
-
-        # Write
-        with open(instruments_file, "w") as f:
-            for symbol, (s, e) in sorted(existing_instruments.items()):
-                f.write(f"{symbol}\t{s}\t{e}\n")
-
-        logger.debug(f"更新股票列表: {len(existing_instruments)} 只股票")
+        # Save to Parquet（存储为 naive datetime，实际是 UTC）
+        df_to_store.to_parquet(filepath, index=True)
+        logger.debug(f"存储 {symbol} 数据完成: {filepath}")
 
     def load_data(
         self,
@@ -321,7 +269,7 @@ class QlibDataAdapter:
         end_date: Optional[datetime] = None,
     ) -> pd.DataFrame:
         """
-        Load Qlib format data.
+        Load Parquet format data.
 
         Args:
             symbols: Stock symbol list
@@ -335,57 +283,55 @@ class QlibDataAdapter:
         all_data = []
 
         for symbol in symbols:
-            symbol_dir = self.features_dir / symbol
-            if not symbol_dir.exists():
-                logger.warning(f"未找到 {symbol} 的数据")
+            # Generate filename: AAPL_5MIN.parquet
+            filename = f"{symbol}_{self.interval_suffix}.parquet"
+            filepath = self.data_dir / filename
+
+            if not filepath.exists():
+                logger.warning(f"未找到 {symbol} 的数据: {filepath}")
                 continue
 
-            # Load date index
-            dates_file = symbol_dir / "_dates.pkl"
-            if not dates_file.exists():
-                continue
+            try:
+                # Load from Parquet（添加 UTC 时区）
+                df = pd.read_parquet(filepath)
+                # 将 naive datetime 视为 UTC
+                df.index = df.index.tz_localize("UTC")
 
-            with open(dates_file, "rb") as f:
-                dates = pickle.load(f)
+                # Add symbol column
+                df["symbol"] = symbol
 
-            # Load features
-            data = {"timestamp": dates}
-            lengths = [len(dates)]
-            for col in ["open", "high", "low", "close", "volume"]:
-                feature_file = symbol_dir / f"${col}.bin"
-                if feature_file.exists():
-                    values = np.fromfile(feature_file, dtype=np.float32)
-                    data[col] = values
-                    lengths.append(len(values))
+                # Apply date filter
+                if start_date:
+                    start_dt = pd.to_datetime(start_date)
+                    if start_dt.tz is None:
+                        start_dt = start_dt.tz_localize("UTC")
+                    df = df[df.index >= start_dt]
+                if end_date:
+                    end_dt = pd.to_datetime(end_date)
+                    if end_dt.tz is None:
+                        end_dt = end_dt.tz_localize("UTC")
+                    df = df[df.index <= end_dt]
 
-            # Defensive handling: align lengths to avoid DataFrame construction failure
-            min_len = min(lengths) if lengths else 0
-            if min_len == 0:
-                continue
-            if len(set(lengths)) != 1:
-                logger.warning(
-                    f"{symbol} 数据长度不一致: {lengths}，将截断到 {min_len}"
-                )
-                data = {k: v[:min_len] for k, v in data.items()}
+                all_data.append(df)
 
-            df = pd.DataFrame(data)
-            df["symbol"] = symbol
-            df["timestamp"] = pd.to_datetime(df["timestamp"])
-
-            # Apply date filter
-            if start_date:
-                df = df[df["timestamp"] >= pd.to_datetime(start_date)]
-            if end_date:
-                df = df[df["timestamp"] <= pd.to_datetime(end_date)]
-
-            all_data.append(df)
+            except Exception as e:
+                logger.error(f"加载 {symbol} 数据失败: {e}")
 
         if not all_data:
             return pd.DataFrame()
 
-        result = pd.concat(all_data, ignore_index=True)
+        # Combine all symbols
+        result = pd.concat(all_data, ignore_index=False)
+
+        # Set MultiIndex (timestamp, symbol)
+        result = result.reset_index()
+        if "timestamp" not in result.columns:
+            # Assume index is already timestamp
+            result = result.rename_axis("timestamp").reset_index()
+
         result = result.set_index(["timestamp", "symbol"])
-        # Deduplicate to ensure (timestamp, symbol) uniqueness, avoid unstack error
+
+        # Deduplicate to ensure (timestamp, symbol) uniqueness
         if result.index.has_duplicates:
             result = result[~result.index.duplicated(keep="last")]
         result = result.sort_index()
@@ -393,26 +339,39 @@ class QlibDataAdapter:
         return result
 
     def get_available_symbols(self) -> list[str]:
-        """Get all available stock symbols"""
-        if not self.features_dir.exists():
+        """Get all available stock symbols from Parquet files"""
+        if not self.data_dir.exists():
             return []
-        return [d.name for d in self.features_dir.iterdir() if d.is_dir()]
+
+        symbols = []
+        for file in self.data_dir.glob("*.parquet"):
+            # Extract symbol from filename: AAPL_5MIN.parquet -> AAPL
+            parts = file.stem.split("_")
+            if len(parts) >= 2:
+                symbols.append(parts[0])
+
+        return sorted(set(symbols))
 
     def get_date_range(self, symbol: str) -> Optional[tuple[datetime, datetime]]:
-        """Get date range for a stock"""
-        symbol_dir = self.features_dir / symbol
-        dates_file = symbol_dir / "_dates.pkl"
+        """Get date range for a stock (returns UTC timezone-aware datetimes)"""
+        filename = f"{symbol}_{self.interval_suffix}.parquet"
+        filepath = self.data_dir / filename
 
-        if not dates_file.exists():
+        if not filepath.exists():
             return None
 
-        with open(dates_file, "rb") as f:
-            dates = pickle.load(f)
+        try:
+            df = pd.read_parquet(filepath)
+            if df.empty:
+                return None
 
-        if not dates:
+            # 添加 UTC 时区
+            df.index = df.index.tz_localize("UTC")
+            return (df.index.min(), df.index.max())
+
+        except Exception as e:
+            logger.error(f"获取 {symbol} 日期范围失败: {e}")
             return None
-
-        return (pd.to_datetime(min(dates)), pd.to_datetime(max(dates)))
 
     # ========== Data Transformation Methods (original functionality) ==========
 

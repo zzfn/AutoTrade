@@ -16,6 +16,8 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from autotrade.utils.timezone import format_et_time
+
 try:
     import lightgbm as lgb
 
@@ -127,7 +129,8 @@ class ModelTrainer(ABC):
             {
                 "model_name": self.model_name,
                 "version": version,
-                "saved_at": datetime.now().isoformat(),
+                "saved_at": format_et_time(datetime.now()),
+                "saved_at_et": format_et_time(datetime.now()),
                 "model_type": self.__class__.__name__,
             }
         )
