@@ -11,6 +11,10 @@ import numpy as np
 import pandas as pd
 from lumibot.strategies.strategy import Strategy
 
+# 应用 Lumibot 补丁：禁用云功能
+from autotrade.lumibot_patches import patch_strategy_to_disable_cloud
+patch_strategy_to_disable_cloud()
+
 # Suppress SettingWithCopyWarning from lumibot's bars.py
 # This is a third-party library issue, not affecting functionality
 warnings.filterwarnings('ignore', message='.*SettingWithCopyWarning.*', module='lumibot.*')
@@ -21,6 +25,9 @@ from lumibot.entities import Asset
 from autotrade.ml import QlibFeatureGenerator, LightGBMTrainer, ModelManager
 from autotrade.ml.inference import ModelInference
 from autotrade.data import lumibot_to_qlib
+
+# Import patched backtesting classes (修复多分钟 timestep 支持)
+from autotrade.lumibot_patches import MyAlpacaBacktesting
 
 
 class QlibMLStrategy(Strategy):
@@ -62,7 +69,7 @@ class QlibMLStrategy(Strategy):
         self.feature_generator = QlibFeatureGenerator(normalize=True)
         self.model_manager = ModelManager(self.models_dir)
         self.inference_engine: Optional[ModelInference] = None
-        
+
         # Legacy compatibility
         self.trainer: Optional[LightGBMTrainer] = None
 
@@ -71,7 +78,7 @@ class QlibMLStrategy(Strategy):
 
         # Load model
         self._load_model()
-        
+
         # Initialize persistent state (self.vars)
         # This will be automatically backed up to DB by Lumibot
         self._init_persistent_state()
@@ -79,12 +86,12 @@ class QlibMLStrategy(Strategy):
         self.log_message(f"QlibMLStrategy initialized")
         self.log_message(f"Stock pool: {self.symbols}")
         self.log_message(f"Top-K: {self.top_k}")
-        
+
         # Log restored state if any
         if self.vars.get("trade_cycle_count", 0) > 0:
             self.log_message(f"Restored state: cycle={self.vars.trade_cycle_count}, "
                            f"positions={len(self.vars.get('entered_positions', {}))}")
-    
+
     def _init_persistent_state(self):
         """
         Initialize persistent state variables.
@@ -299,29 +306,29 @@ class QlibMLStrategy(Strategy):
     def _fetch_market_data(self) -> Optional[dict]:
         """
         获取所有候选股票的历史数据。
-        
+
         Returns:
             {symbol: DataFrame} 字典，如果失败返回 None
         """
         assets = [Asset(symbol=s) for s in self.symbols]
-        
-        # 计算需要的 K 线数量
-        bars_per_day = 390
-        min_required_bars = 30 * 5
+
+        # 计算需要的 K 线数量（5 分钟数据每天 78 根）
+        bars_per_day = 78  # 390 / 5 = 78
+        min_required_bars = 30  # 至少需要 30 根 5 分钟 K 线
         requested_bars = max(int(self.lookback_period * bars_per_day), min_required_bars)
-        
+
         try:
-            histories = self.get_historical_prices_for_assets(
-                assets, requested_bars, "minute"
+            histories = self.get_historical_prices_for_assets文件(
+                assets, requested_bars, "5 minutes"
             )
         except Exception as e:
             self.log_message(f"批量获取历史数据失败: {e}")
             return None
-        
+
         if not histories:
             self.log_message("未返回历史数据")
             return None
-        
+
         # 转换为标准格式
         market_data = {}
         for asset, history in histories.items():
@@ -333,28 +340,19 @@ class QlibMLStrategy(Strategy):
                     continue
                 if isinstance(history, pd.DataFrame) and history.empty:
                     continue
-                
+
                 # 使用适配器标准化数据格式
                 df = lumibot_to_qlib(history, symbol=symbol)
-                
-                # 聚合为 5 分钟数据
-                # 使用 .copy() 确保是独立副本，避免 lumibot 内部的 SettingWithCopyWarning
-                df = df.resample('5min').agg({
-                    'open': 'first',
-                    'high': 'max',
-                    'low': 'min',
-                    'close': 'last',
-                    'volume': 'sum'
-                }).dropna().copy()
-                
+
+                # 不再需要 resample，因为直接获取的就是 5 分钟数据
                 if len(df) >= 30:
                     market_data[symbol] = df
                 else:
                     self.log_message(f"{symbol} 数据不足: {len(df)} bars")
-                    
+
             except Exception as e:
                 self.log_message(f"{symbol} 数据处理失败: {e}")
-        
+
         return market_data if market_data else None
 
     def _compute_predictions(self, market_data: dict) -> dict:

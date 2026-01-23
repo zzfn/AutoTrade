@@ -8,9 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from lumibot.backtesting import AlpacaBacktesting
-
 from autotrade.core.config import config
+from autotrade.lumibot_patches import MyAlpacaBacktesting
 from autotrade.ml import ModelManager
 from autotrade.qlib_ml_strategy import QlibMLStrategy
 
@@ -266,7 +265,7 @@ def _execute_backtest(params: dict[str, Any], log_fn: Callable[[str], None]) -> 
     progress_thread.start()
     try:
         strategy_class.backtest(
-            AlpacaBacktesting,
+            MyAlpacaBacktesting,  # 使用修复后的 MyAlpacaBacktesting
             backtesting_start,
             backtesting_end,
             config=alpaca_config,

@@ -32,11 +32,23 @@ from autotrade.web.backtest_tasks import create_task, get_task, init_db, run_wor
 
 load_dotenv()
 
+# 自定义日志过滤器：忽略 LUMIWEALTH_API_KEY 警告
+class LumiwealthFilter(logging.Filter):
+    def filter(self, record):
+        # 过滤包含 LUMIWEALTH_API_KEY not set 的日志
+        if "LUMIWEALTH_API_KEY not set" in record.getMessage():
+            return False
+        return True
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
+
+# 为所有 logger 添加过滤器
+logging.getLogger().addFilter(LumiwealthFilter())
+
 logger = logging.getLogger(__name__)
 
 # ==============================================================================
